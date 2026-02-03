@@ -1,0 +1,25 @@
+
+mobile-app/app.json
+
+# Environment
+.env
+
+# Node
+**/node_modules/
+**/.expo/
+**/.turbo/
+**/dist/
+**/build/
+
+# Expo
+**/.expo-shared/
+*.apk
+*.aab
+*.ipa
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
