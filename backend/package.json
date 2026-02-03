@@ -16,8 +16,10 @@
   "type": "module",
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.1.0",
+    "@lifi/sdk": "^3.12.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
+    "ethers": "^6.15.0",
     "express": "^5.2.1",
     "firebase-admin": "^12.7.0",
     "mongoose": "^9.1.5"

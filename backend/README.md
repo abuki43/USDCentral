@@ -16,6 +16,17 @@ npm install
 npm run dev
 ```
 
+### LI.FI configuration
+
+The LI.FI SDK requires an `integrator` string (set via `LIFI_INTEGRATOR`). This is **not** an API key; it’s a non-secret identifier used for attribution/analytics and sometimes rate-limiting.
+
+### Swap worker
+
+The backend runs a small swap-job worker that picks up pending jobs from Firestore and executes approval + swap transactions.
+
+- `SWAP_WORKER_ENABLED` (default `true`)
+- `SWAP_WORKER_INTERVAL_MS` (default `5000`)
+
 ### Test endpoint
 
 ```bash

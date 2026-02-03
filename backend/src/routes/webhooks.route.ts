@@ -8,6 +8,7 @@ import {
   recomputeUnifiedUsdcBalance,
   resolveUidFromWalletId,
 } from "../services/circle.service.js";
+import { enqueueSameChainSwapToUsdc } from "../services/swap.service.js";
 
 const router = Router();
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
@@ -43,6 +44,7 @@ router.post(
   express.raw({ type: "*/*" }),
   async (req, res) => {
     try {
+    console.log("Received Circle webhook");
       const keyId = req.header("X-Circle-Key-Id");
       const signature = req.header("X-Circle-Signature");
       if (!keyId || !signature) {
@@ -54,6 +56,8 @@ router.post(
       const publicKey = await getCachedPublicKey(keyId);
       const signatureBytes = Buffer.from(signature, "base64");
       const raw = req.body as Buffer;
+
+      console.log("Verifying webhook signature");
 
       const valid = crypto.verify("sha256", raw, publicKey, signatureBytes);
       if (!valid) {
@@ -91,7 +95,6 @@ router.post(
         return res.status(200).json({ ok: true });
       }
 
-      // Only react to USDC inbound.
       const tokenId = tx.tokenId as string | undefined;
       if (!tokenId) {
         return res.status(200).json({ ok: true });
@@ -100,9 +103,9 @@ router.post(
       const tokenResp = await circle.getToken({ id: tokenId });
       const token = tokenResp.data?.token as any;
       const symbol = (token?.symbol as string | undefined) ?? null;
-      if (symbol !== "USDC") {
-        return res.status(200).json({ ok: true });
-      }
+      const tokenAddress = (token?.tokenAddress as string | undefined) ?? null;
+      const decimals = (token?.decimals as number | undefined) ?? null;
+      const isUsdc = symbol?.toUpperCase() === "USDC";
 
       const state = (tx.state as string | undefined) ?? "";
       const amount = (tx.amounts?.[0] as string | undefined) ?? "0";
@@ -120,6 +123,8 @@ router.post(
             txHash: tx.txHash ?? null,
             state,
             symbol,
+            tokenAddress,
+            decimals,
             amount,
             updatedAt: serverTimestamp(),
             createdAt: serverTimestamp(),
@@ -133,7 +138,7 @@ router.post(
         .collection("alerts")
         .doc("inboundUSDC");
 
-      if (state === "CONFIRMED") {
+      if (isUsdc && state === "CONFIRMED") {
         await alertRef.set(
           {
             txId,
@@ -148,12 +153,41 @@ router.post(
       }
 
       if (state === "COMPLETE" || state === "COMPLETED") {
-        await alertRef.delete().catch(() => undefined);
-        await recomputeUnifiedUsdcBalance(uid);
+        if (isUsdc) {
+          await alertRef.delete().catch(() => undefined);
+          await recomputeUnifiedUsdcBalance(uid);
+        } else {
+          try {
+            await enqueueSameChainSwapToUsdc({
+              uid,
+              depositTxId: txId,
+              walletId,
+              blockchain: (tx.blockchain ?? null) as any,
+              tokenSymbol: symbol,
+              tokenAddress,
+              tokenDecimals: decimals,
+              amount,
+            });
+          } catch (e) {
+            console.error("Failed to enqueue same-chain swap to USDC", {
+              txId,
+              uid,
+              walletId,
+              blockchain: tx.blockchain ?? null,
+              state,
+              amount,
+              symbol,
+              tokenAddress,
+              decimals,
+              error: (e as Error)?.message,
+            });
+          }
+        }
       }
 
       return res.status(200).json({ ok: true });
     } catch (error) {
+    console.error("Error processing Circle webhook:", error);
       return res.status(500).json({ message: (error as Error).message });
     }
   },
