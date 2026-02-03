@@ -1,10 +1,10 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Redirect, Stack } from 'expo-router';
+import { Stack, usePathname, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AppState } from 'react-native';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/components/useColorScheme';
@@ -75,14 +75,34 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const { user, initializing } = useAuthStore();
   const { isEnabled, isLocked, isInitialized } = useLocalAuthStore();
+  const router = useRouter();
+  const pathname = usePathname();
+  const lastNavKeyRef = useRef<string | null>(null);
 
   if (initializing || !isInitialized) {
     return null;
   }
 
-  if (user && isEnabled && isLocked) {
-    return <Redirect href="/lock" />;
-  }
+  useEffect(() => {
+    const shouldLock = Boolean(user && isEnabled && isLocked);
+    const navKey = `${shouldLock}:${pathname}`;
+
+    if (lastNavKeyRef.current === navKey) return;
+
+    if (shouldLock) {
+      if (pathname !== '/lock') {
+        lastNavKeyRef.current = navKey;
+        router.replace('/lock');
+      }
+      return;
+    }
+
+    // If we got unlocked while on the lock screen, return to the app.
+    if (pathname === '/lock') {
+      lastNavKeyRef.current = navKey;
+      router.replace('/(tabs)');
+    }
+  }, [user, isEnabled, isLocked, pathname, router]);
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>

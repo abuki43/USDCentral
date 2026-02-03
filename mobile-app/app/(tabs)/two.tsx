@@ -1,60 +1,67 @@
-import { Pressable, StyleSheet } from 'react-native';
+import { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { doc, onSnapshot } from 'firebase/firestore';
 
-import { Text, View } from '@/components/Themed';
+import { Text } from '@/components/Themed';
+import { firestore } from '@/lib/firebase';
 import { useAuthStore } from '@/store/authStore';
 
-export default function TabTwoScreen() {
-  const { user, logout, isSubmitting } = useAuthStore();
+type UserDoc = {
+  circle?: {
+    evmAddress?: string | null;
+    solAddress?: string | null;
+  };
+};
+
+export default function DepositScreen() {
+  const { user } = useAuthStore();
+  const [evm, setEvm] = useState<string | null>(null);
+  const [sol, setSol] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    const ref = doc(firestore, 'users', user.uid);
+    return onSnapshot(ref, (snap) => {
+      const data = snap.data() as UserDoc | undefined;
+      setEvm(data?.circle?.evmAddress ?? null);
+      setSol(data?.circle?.solAddress ?? null);
+    });
+  }, [user]);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Account</Text>
-      <Text style={styles.subtitle}>{user?.email ?? 'Signed in'}</Text>
-      <View style={styles.separator} lightColor="#eee" darkColor="rgba(255,255,255,0.1)" />
-      <Pressable
-        style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-        onPress={logout}
-        disabled={isSubmitting}
-      >
-        <Text style={styles.buttonText}>{isSubmitting ? 'Signing out...' : 'Sign out'}</Text>
-      </Pressable>
+      <Text style={styles.title}>Deposit</Text>
+      <Text style={styles.subtitle}>
+        EVM chains share one address. Solana has its own address.
+      </Text>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>EVM deposit address</Text>
+        <Text style={styles.mono}>{evm ?? 'Setting up…'}</Text>
+        <Text style={styles.helper}>
+          Use on: Ethereum Sepolia, Polygon Amoy, Arbitrum Sepolia, OP Sepolia, Base Sepolia
+        </Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Solana (Devnet) deposit address</Text>
+        <Text style={styles.mono}>{sol ?? 'Setting up…'}</Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+  container: { flex: 1, padding: 24, gap: 16 },
+  title: { fontSize: 24, fontWeight: '800' },
+  subtitle: { opacity: 0.7 },
+  section: { gap: 8, paddingTop: 12 },
+  sectionTitle: {
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    opacity: 0.6,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    marginTop: 8,
-    fontSize: 14,
-    opacity: 0.7,
-  },
-  separator: {
-    marginVertical: 30,
-    height: 1,
-    width: '80%',
-  },
-  button: {
-    minWidth: 180,
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    backgroundColor: '#1b4dff',
-  },
-  buttonPressed: {
-    opacity: 0.8,
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
+  mono: { fontSize: 14 },
+  helper: { fontSize: 12, opacity: 0.7 },
 });

@@ -1,9 +1,11 @@
-import admin from "firebase-admin";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import "dotenv/config";
+import { cert, getApp, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import dotenv from "dotenv";
 
-
-
+// Ensure env is loaded even if this module is imported before the server entrypoint runs.
+dotenv.config({ path: ".env.local" });
+dotenv.config();
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
@@ -22,7 +24,7 @@ if (!projectId || !clientEmail || !privateKey) {
 }
 
 const firebaseAdminApp = getApps().length
-  ? getApps()[0]
+  ? getApp()
   : initializeApp({
       credential: cert({
         projectId,
@@ -32,5 +34,5 @@ const firebaseAdminApp = getApps().length
     });
 
 export { firebaseAdminApp };
-export const firebaseAuthAdmin = admin.auth();
-export const firestoreAdmin = admin.firestore();
+export const firebaseAuthAdmin = getAuth(firebaseAdminApp);
+export const firestoreAdmin = getFirestore(firebaseAdminApp);

@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 
+import { backendFetch } from '@/lib/backend';
 import { firebaseAuth, firestore } from '@/lib/firebase';
 
 type AuthState = {
@@ -43,6 +44,7 @@ const formatFirebaseError = (error: unknown): string => {
 };
 
 let authListenerInitialized = false;
+let lastProvisionedUid: string | null = null;
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
@@ -69,6 +71,21 @@ export const useAuthStore = create<AuthState>((set) => ({
             },
             { merge: true },
           );
+
+          console.log("User document updated");
+          if (user.uid !== lastProvisionedUid) {
+            console.log("Provisioning circle wallets for user:", user.uid);
+            lastProvisionedUid = user.uid;
+            backendFetch('/circle/provision', {
+              method: 'POST',
+              body: JSON.stringify({}),
+            }).catch((err) => {
+              if (__DEV__) {
+                const message = err instanceof Error ? err.message : String(err);
+                console.log('Circle provision failed:', message);
+              }
+            });
+          }
         }
       },
       (error) => {
