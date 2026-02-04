@@ -1,6 +1,4 @@
-import { Pressable, StyleSheet } from 'react-native';
-
-import { Text } from '@/components/Themed';
+import { Pressable, Text } from 'react-native';
 
 type PrimaryButtonProps = {
   label: string;
@@ -13,34 +11,15 @@ export default function PrimaryButton({ label, onPress, disabled }: PrimaryButto
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      style={({ pressed }) => [
-        styles.button,
-        pressed && styles.buttonPressed,
-        disabled && styles.buttonDisabled,
-      ]}
+      className={[
+        'w-full rounded-2xl px-4 py-4 items-center justify-center',
+        'bg-primary-500',
+        'shadow-sm',
+        disabled ? 'opacity-50' : 'opacity-100',
+      ].join(' ')}
+      android_ripple={{ color: 'rgba(255,255,255,0.25)' }}
     >
-      <Text style={styles.buttonText}>{label}</Text>
+      <Text className="text-white text-base font-sans-semibold">{label}</Text>
     </Pressable>
   );
 }
-
-const styles = StyleSheet.create({
-  button: {
-    width: '100%',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    backgroundColor: '#1b4dff',
-  },
-  buttonPressed: {
-    opacity: 0.8,
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});

@@ -3,7 +3,6 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Redirect, Tabs } from 'expo-router';
 
 import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
 import { useAuthStore } from '@/store/authStore';
 
 // You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
@@ -11,11 +10,10 @@ function TabBarIcon(props: {
   name: React.ComponentProps<typeof FontAwesome>['name'];
   color: string;
 }) {
-  return <FontAwesome size={28} style={{ marginBottom: -3 }} {...props} />;
+  return <FontAwesome size={22} {...props} />;
 }
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
   const { user, initializing } = useAuthStore();
 
   if (initializing) {
@@ -29,8 +27,10 @@ export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
+        tabBarActiveTintColor: Colors.light.tabIconSelected,
+        tabBarInactiveTintColor: Colors.light.tabIconDefault,
+        headerShown: true,
+        headerTitleAlign: 'center',
       }}>
       <Tabs.Screen
         name="index"

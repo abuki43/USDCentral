@@ -1,14 +1,13 @@
 import { useState } from 'react';
-import { StyleSheet, Switch, View } from 'react-native';
+import { ScrollView, Switch, Text, View } from 'react-native';
 
 import AuthTextInput from '@/components/AuthTextInput';
 import PrimaryButton from '@/components/PrimaryButton';
-import { Text } from '@/components/Themed';
 import { useAuthStore } from '@/store/authStore';
 import { useLocalAuthStore } from '@/store/localAuthStore';
 
 export default function ProfileScreen() {
-  const { user } = useAuthStore();
+  const { user, logout, isSubmitting } = useAuthStore();
   const {
     isEnabled,
     biometricsSupported,
@@ -49,29 +48,47 @@ export default function ProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.section}>
-        <Text style={styles.title}>Profile</Text>
-        <View style={styles.detailRow}>
-          <Text style={styles.label}>Full name</Text>
-          <Text style={styles.value}>{user?.displayName ?? '—'}</Text>
-        </View>
-        <View style={styles.detailRow}>
-          <Text style={styles.label}>Email</Text>
-          <Text style={styles.value}>{user?.email ?? '—'}</Text>
-        </View>
-      </View>
+    <ScrollView className="flex-1 bg-surface-0">
+      <View className="px-6 pt-6 pb-10">
+        <Text className="text-2xl text-ink-900 font-sans-bold">Profile</Text>
 
-      <View style={styles.section}>
-        <Text style={styles.title}>Local sign-in</Text>
-        <View style={styles.switchRow}>
-          <Text style={styles.label}>Enable local sign-in</Text>
+        <View className="mt-4 bg-surface-1 border border-stroke-100 rounded-3xl p-5">
+        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+          Account
+        </Text>
+
+        <View className="mt-4">
+          <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+            Full name
+          </Text>
+          <Text className="text-base text-ink-900 font-sans mt-1">
+            {user?.displayName ?? '—'}
+          </Text>
+        </View>
+
+        <View className="mt-4">
+          <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+            Email
+          </Text>
+          <Text className="text-base text-ink-900 font-sans mt-1">{user?.email ?? '—'}</Text>
+        </View>
+        </View>
+
+        <View className="mt-4 bg-surface-1 border border-stroke-100 rounded-3xl p-5">
+        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+          Local sign-in
+        </Text>
+
+        <View className="flex-row items-center justify-between mt-4">
+          <Text className="text-base text-ink-900 font-sans">Enable local sign-in</Text>
           <Switch value={isEnabled} onValueChange={handleToggleLocalAuth} />
         </View>
 
         {!pinSet ? (
-          <View style={styles.pinSection}>
-            <Text style={styles.subtitle}>Set a 4-digit PIN to secure your app.</Text>
+          <View className="mt-4">
+            <Text className="text-sm text-ink-500 font-sans mb-3">
+              Set a 4-digit PIN to secure your app.
+            </Text>
             <AuthTextInput
               label="New PIN"
               value={pin}
@@ -97,13 +114,15 @@ export default function ProfileScreen() {
               onPress={handleSetPin}
               disabled={pin.length !== 4 || pinConfirm.length !== 4}
             />
-            {pinError ? <Text style={styles.error}>{pinError}</Text> : null}
+            {pinError ? (
+              <Text className="text-danger-500 font-sans mt-3">{pinError}</Text>
+            ) : null}
           </View>
         ) : null}
 
         {biometricsSupported ? (
-          <View style={styles.switchRow}>
-            <Text style={styles.label}>Use fingerprint / Face ID</Text>
+          <View className="flex-row items-center justify-between mt-4">
+            <Text className="text-base text-ink-900 font-sans">Use fingerprint / Face ID</Text>
             <Switch
               value={biometricsEnabled}
               onValueChange={(value) => setBiometricsEnabled(value)}
@@ -111,57 +130,35 @@ export default function ProfileScreen() {
             />
           </View>
         ) : (
-          <Text style={styles.subtitle}>Biometrics are not available on this device.</Text>
+          <Text className="text-sm text-ink-500 font-sans mt-4">
+            Biometrics are not available on this device.
+          </Text>
         )}
 
         {isEnabled ? (
-          <PrimaryButton label="Lock now" onPress={lock} />
+          <View className="mt-4">
+            <PrimaryButton label="Lock now" onPress={lock} />
+          </View>
         ) : null}
 
-        {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+        {errorMessage ? (
+          <Text className="text-danger-500 font-sans mt-4">{errorMessage}</Text>
+        ) : null}
+        </View>
+
+        <View className="mt-4 bg-surface-1 border border-stroke-100 rounded-3xl p-5">
+        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+          Sign out
+        </Text>
+        <View className="mt-4">
+          <PrimaryButton
+            label={isSubmitting ? 'Signing out...' : 'Sign out'}
+            onPress={logout}
+            disabled={isSubmitting}
+          />
+        </View>
+        </View>
       </View>
-    </View>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 24,
-    gap: 24,
-  },
-  section: {
-    gap: 16,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  detailRow: {
-    gap: 6,
-  },
-  label: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    opacity: 0.6,
-  },
-  value: {
-    fontSize: 16,
-  },
-  subtitle: {
-    fontSize: 14,
-    opacity: 0.7,
-  },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  pinSection: {
-    gap: 12,
-  },
-  error: {
-    color: '#ff4d4f',
-  },
-});

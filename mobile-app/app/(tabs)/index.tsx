@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { doc, onSnapshot } from 'firebase/firestore';
 
-import PrimaryButton from '@/components/PrimaryButton';
-import { Text } from '@/components/Themed';
+import { backendFetch } from '@/lib/backend';
 import { firestore } from '@/lib/firebase';
 import { useAuthStore } from '@/store/authStore';
 
@@ -18,10 +17,27 @@ type InboundAlertDoc = {
   symbol?: string;
 };
 
+type CircleTransaction = {
+  id: string;
+  blockchain: string;
+  state: string;
+  createDate: string;
+  updateDate?: string;
+  txHash?: string;
+  transactionType?: 'INBOUND' | 'OUTBOUND';
+  txType?: 'INBOUND' | 'OUTBOUND';
+  amounts?: string[];
+  sourceAddress?: string;
+  destinationAddress?: string;
+};
+
 export default function TabOneScreen() {
-  const { user, logout, isSubmitting } = useAuthStore();
+  const { user } = useAuthStore();
   const [balance, setBalance] = useState<string>('—');
   const [alert, setAlert] = useState<InboundAlertDoc | null>(null);
+  const [transactions, setTransactions] = useState<CircleTransaction[]>([]);
+  const [isLoadingTx, setIsLoadingTx] = useState(false);
+  const [txError, setTxError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -44,49 +60,103 @@ export default function TabOneScreen() {
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    setIsLoadingTx(true);
+    setTxError(null);
+    backendFetch('/circle/transactions?pageSize=20&order=DESC')
+      .then((data: { transactions?: CircleTransaction[] }) => {
+        if (cancelled) return;
+        setTransactions(data.transactions ?? []);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setTxError(e instanceof Error ? e.message : 'Failed to load transactions');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingTx(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.kicker}>Total USDC</Text>
-        <Text style={styles.amount}>{balance}</Text>
+    <ScrollView className="flex-1 bg-surface-0">
+      <View className="px-6 pt-6 pb-10">
+        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+          Total USDC
+        </Text>
+        <Text className="text-4xl text-ink-900 font-sans-bold mt-2">{balance}</Text>
 
         {alert?.state === 'CONFIRMED' ? (
-          <View style={styles.banner}>
-            <Text style={styles.bannerTitle}>Incoming deposit</Text>
-            <Text style={styles.bannerBody}>
-              {alert.amount ?? '—'} {alert.symbol ?? 'USDC'} on {alert.blockchain ?? 'network'}
-              {' '}confirmed. Finalizing…
+          <View className="mt-5 bg-primary-50 border border-primary-100 rounded-3xl p-4">
+            <Text className="text-ink-900 font-sans-semibold">Incoming deposit</Text>
+            <Text className="text-ink-700 font-sans mt-1">
+              {alert.amount ?? '—'} {alert.symbol ?? 'USDC'} on {alert.blockchain ?? 'network'} confirmed.
+              {' '}Finalizing…
             </Text>
           </View>
         ) : null}
-
-        <PrimaryButton
-          label={isSubmitting ? 'Signing out...' : 'Sign out'}
-          onPress={logout}
-          disabled={isSubmitting}
-        />
       </View>
-    </View>
+
+      <View className="mt-6 bg-surface-1 border border-stroke-100 rounded-3xl p-5">
+        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+          Recent activity
+        </Text>
+
+        {isLoadingTx ? (
+          <View className="flex-row items-center mt-4">
+            <ActivityIndicator />
+            <Text className="ml-3 text-ink-500 font-sans">Loading…</Text>
+          </View>
+        ) : txError ? (
+          <Text className="mt-4 text-danger-500 font-sans">{txError}</Text>
+        ) : transactions.length === 0 ? (
+          <Text className="mt-4 text-ink-500 font-sans">No transactions yet.</Text>
+        ) : (
+          <View className="mt-4">
+            {transactions.slice(0, 10).map((tx, index) => {
+              const txType = tx.transactionType ?? tx.txType;
+              const direction = txType === 'INBOUND' ? 'Received' : 'Sent';
+              const sign = txType === 'INBOUND' ? '+' : '-';
+              const amount = tx.amounts?.[0];
+              const when = tx.createDate ? new Date(tx.createDate).toLocaleString() : '';
+
+              return (
+                <View
+                  key={tx.id}
+                  className={index === 0 ? 'pt-0' : 'pt-4 border-t border-stroke-100'}
+                >
+                  <View className="flex-row items-start justify-between">
+                    <View className="flex-1 pr-4">
+                      <Text className="text-base text-ink-900 font-sans-semibold">
+                        {direction}
+                      </Text>
+                      <Text className="text-xs text-ink-500 font-sans mt-1">
+                        {tx.blockchain} • {tx.state}
+                      </Text>
+                      {when ? (
+                        <Text className="text-xs text-ink-500 font-sans mt-1">{when}</Text>
+                      ) : null}
+                    </View>
+
+                    <View>
+                      <Text className="text-base text-ink-900 font-sans-semibold">
+                        {amount ? `${sign}${amount}` : '—'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 24 },
-  card: { width: '100%', gap: 14 },
-  kicker: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    opacity: 0.6,
-  },
-  amount: { fontSize: 40, fontWeight: '800' },
-  banner: {
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.12)',
-    gap: 4,
-  },
-  bannerTitle: { fontWeight: '700' },
-  bannerBody: { opacity: 0.8 },
-});

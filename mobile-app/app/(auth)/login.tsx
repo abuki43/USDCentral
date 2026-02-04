@@ -1,15 +1,9 @@
 import { Link, Redirect } from 'expo-router';
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
 
 import AuthTextInput from '@/components/AuthTextInput';
 import PrimaryButton from '@/components/PrimaryButton';
-import { Text } from '@/components/Themed';
 import { useAuthStore } from '@/store/authStore';
 
 export default function LoginScreen() {
@@ -30,88 +24,64 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      className="flex-1 bg-surface-0 px-6"
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
-      <View style={styles.card}>
-        <Text style={styles.title}>Welcome back</Text>
-        <Text style={styles.subtitle}>Sign in to your USDCentral account.</Text>
+      <View className="flex-1 justify-center">
+        <View className="mb-6">
+          <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+            USDCentral
+          </Text>
+          <Text className="text-3xl text-ink-900 font-sans-bold mt-2">
+            Welcome back
+          </Text>
+          <Text className="text-base text-ink-500 font-sans mt-2">
+            Sign in to continue building your unified USDC balance.
+          </Text>
+        </View>
 
-        <AuthTextInput
-          label="Email"
-          value={email}
-          onChangeText={(value) => {
-            if (errorMessage) clearError();
-            setEmail(value);
-          }}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <AuthTextInput
-          label="Password"
-          value={password}
-          onChangeText={(value) => {
-            if (errorMessage) clearError();
-            setPassword(value);
-          }}
-          secureTextEntry
-        />
+        <View className="bg-surface-1 border border-stroke-100 rounded-3xl p-5">
+          <AuthTextInput
+            label="Email"
+            value={email}
+            onChangeText={(value) => {
+              if (errorMessage) clearError();
+              setEmail(value);
+            }}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <AuthTextInput
+            label="Password"
+            value={password}
+            onChangeText={(value) => {
+              if (errorMessage) clearError();
+              setPassword(value);
+            }}
+            secureTextEntry
+          />
 
-        {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+          {errorMessage ? (
+            <Text className="text-danger-500 font-sans mb-4">{errorMessage}</Text>
+          ) : null}
 
-        <PrimaryButton
-          label={isSubmitting ? 'Signing in...' : 'Sign in'}
-          onPress={() => login(email, password)}
-          disabled={disabled}
-        />
+          <PrimaryButton
+            label={isSubmitting ? 'Signing in...' : 'Sign in'}
+            onPress={() => login(email, password)}
+            disabled={disabled}
+          />
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>New here?</Text>
-          <Link href="/(auth)/register" style={styles.footerLink}>
-            Create an account
-          </Link>
+          <View className="flex-row items-center justify-center mt-5">
+            <Text className="text-ink-500 font-sans">New here? </Text>
+            <Link href="/(auth)/register" asChild>
+              <Pressable>
+                <Text className="text-primary-600 font-sans-semibold">Create an account</Text>
+              </Pressable>
+            </Link>
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  subtitle: {
-    fontSize: 14,
-    opacity: 0.7,
-    marginBottom: 24,
-  },
-  error: {
-    color: '#ff4d4f',
-    marginBottom: 16,
-  },
-  footer: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footerText: {
-    opacity: 0.7,
-  },
-  footerLink: {
-    color: '#1b4dff',
-    fontWeight: '600',
-  },
-});

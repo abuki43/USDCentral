@@ -16,6 +16,7 @@ export default function AuthLayout() {
   return (
     <Stack
       screenOptions={{
+        headerShown: false,
         headerTitleAlign: 'center',
       }}
     />
