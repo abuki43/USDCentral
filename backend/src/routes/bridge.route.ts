@@ -8,9 +8,64 @@ import {
   type SupportedChain,
   USDC_TOKEN_ADDRESS_BY_CHAIN,
 } from "../lib/usdcAddresses.js";
-import { bridgeUsdcFromBaseForUser } from "../services/bridge.service.js";
+import {
+  bridgeUsdcFromBaseForUser,
+  estimateBridgeUsdcFromBaseForUser,
+} from "../services/bridge.service.js";
 
 const router = Router();
+
+const sanitizeForFirestore = (value: unknown) =>
+  JSON.parse(
+    JSON.stringify(value, (_key, v) => {
+      if (typeof v === "bigint") return v.toString();
+      if (v instanceof Error) {
+        return {
+          name: v.name,
+          message: v.message,
+          stack: v.stack,
+        };
+      }
+      return v;
+    }),
+  );
+
+router.post("/estimate", requireAuth, async (req, res) => {
+  try {
+    const { user } = req as AuthenticatedRequest;
+    const { destinationChain, recipientAddress, amount } = req.body as {
+      destinationChain?: SupportedChain;
+      recipientAddress?: string;
+      amount?: string;
+    };
+
+    if (!destinationChain || !recipientAddress || !amount) {
+      return res.status(400).json({ message: "Missing estimate parameters." });
+    }
+
+    if (destinationChain === BASE_DESTINATION_CHAIN) {
+      return res.json({ estimate: null, fees: [] });
+    }
+
+    const estimate = await estimateBridgeUsdcFromBaseForUser({
+      uid: user.uid,
+      destinationChain,
+      amount,
+      recipientAddress,
+    });
+
+    const safeEstimate = JSON.parse(
+      JSON.stringify(estimate, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+    );
+
+    return res.json({ estimate: safeEstimate });
+  } catch (error) {
+    console.error("Estimate failed:", error);
+    return res.status(500).json({ message: (error as Error).message });
+  }
+});
 
 router.post("/withdraw", requireAuth, async (req, res) => {
   try {
@@ -55,7 +110,7 @@ router.post("/withdraw", requireAuth, async (req, res) => {
           recipientAddress,
           amount,
           type: "DIRECT",
-          transfer,
+          transfer: sanitizeForFirestore(transfer),
           createdAt: new Date().toISOString(),
         });
 
@@ -69,6 +124,8 @@ router.post("/withdraw", requireAuth, async (req, res) => {
       recipientAddress,
     });
 
+    const safeResult = sanitizeForFirestore(result);
+
     await firestoreAdmin
       .collection("users")
       .doc(user.uid)
@@ -78,11 +135,11 @@ router.post("/withdraw", requireAuth, async (req, res) => {
         recipientAddress,
         amount,
         type: "BRIDGE",
-        result,
+        result: safeResult,
         createdAt: new Date().toISOString(),
       });
 
-    return res.json({ result });
+    return res.json({ result: safeResult });
   } catch (error) {
     console.error("Withdraw failed:", error);
     return res.status(500).json({ message: (error as Error).message });
