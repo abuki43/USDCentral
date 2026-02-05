@@ -8,6 +8,8 @@ export const SUPPORTED_EVM_CHAINS = [
 
 export const SUPPORTED_SOL_CHAINS = ["SOL-DEVNET"] as const;
 
+export const BASE_DESTINATION_CHAIN = "BASE-SEPOLIA" as const;
+
 export type SupportedChain =
   | (typeof SUPPORTED_EVM_CHAINS)[number]
   | (typeof SUPPORTED_SOL_CHAINS)[number];

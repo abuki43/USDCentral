@@ -53,6 +53,7 @@ export const provisionCircleWalletsForUser = async (uid: string) => {
     blockchains: [...SUPPORTED_EVM_CHAINS],
     count: 1,
     metadata: [{ refId: uid, name: `user:${uid}` }],
+    accountType: "SCA",
   });
 
   const solResp = await circle.createWallets({

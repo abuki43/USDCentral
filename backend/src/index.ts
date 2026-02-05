@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import express from "express";
 
 import authRouter from "./routes/auth.route.js";
+import bridgeRouter from "./routes/bridge.route.js";
 import circleRouter from "./routes/circle.route.js";
 import webhooksRouter from "./routes/webhooks.route.js";
 import { processPendingSwapJobsOnce } from "./services/swap.service.js";
@@ -29,6 +30,7 @@ app.get("/", (_req, res) => {
 
 app.use("/auth", authRouter);
 app.use("/circle", circleRouter);
+app.use("/bridge", bridgeRouter);
 
 const port = Number(process.env.PORT) || 3000;
 
