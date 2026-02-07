@@ -1,8 +1,11 @@
 
-mobile-app/app.json
+# mobile-app/app.json
 
 # Environment
 .env
+.env.local
+.env.*
+!.env.example
 
 # Node
 **/node_modules/
