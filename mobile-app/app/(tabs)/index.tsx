@@ -17,10 +17,12 @@ type UnifiedBalanceDoc = {
 };
 
 type InboundAlertDoc = {
+  txId?: string;
   state?: string;
   blockchain?: string | null;
   amount?: string;
   symbol?: string;
+  updatedAt?: Timestamp | string | null;
 };
 
 type InboundTokenAlert = {
@@ -36,6 +38,13 @@ type FinalizedTokenAlert = {
   symbol?: string | null;
   destinationChain?: string | null;
   sourceChain?: string | null;
+};
+
+type DisplayAlert = {
+  type: 'success' | 'info';
+  title: string;
+  message: string;
+  duration: number;
 };
 
 type UnifiedTransaction = {
@@ -63,11 +72,13 @@ export default function TabOneScreen() {
   const [alert, setAlert] = useState<InboundAlertDoc | null>(null);
   const [incomingAlert, setIncomingAlert] = useState<InboundTokenAlert | null>(null);
   const [finalizedAlert, setFinalizedAlert] = useState<FinalizedTokenAlert | null>(null);
+  const [displayAlert, setDisplayAlert] = useState<DisplayAlert | null>(null);
   const [transactions, setTransactions] = useState<UnifiedTransaction[]>([]);
   const [isLoadingTx, setIsLoadingTx] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const lastIncomingTxIdRef = useRef<string | null>(null);
   const lastFinalizedOriginRef = useRef<string | null>(null);
+  const lastAlertKeyRef = useRef<string | null>(null);
 
   const sortedTransactions = useMemo(() => {
     const toMillis = (value?: Timestamp | string | null) => {
@@ -133,6 +144,36 @@ export default function TabOneScreen() {
       unsubAlert();
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!alert?.state) return;
+    const updatedAt = alert.updatedAt instanceof Timestamp
+      ? alert.updatedAt.toMillis()
+      : typeof alert.updatedAt === 'string'
+        ? new Date(alert.updatedAt).getTime()
+        : 0;
+    const key = [alert.txId ?? 'no-tx', alert.state ?? 'no-state', updatedAt].join(':');
+    if (lastAlertKeyRef.current === key) return;
+    lastAlertKeyRef.current = key;
+
+    if (alert.state === 'CONFIRMED') {
+      setDisplayAlert({
+        type: 'info',
+        title: 'Incoming deposit',
+        message: `${alert.amount ?? '—'} ${alert.symbol ?? 'USDC'} on ${alert.blockchain ?? 'network'} confirmed. Finalizing…`,
+        duration: 6000,
+      });
+    }
+
+    if (alert.state === 'BRIDGED' || alert.state === 'COMPLETED') {
+      setDisplayAlert({
+        type: 'success',
+        title: 'Funds finalized',
+        message: `${alert.amount ?? '—'} ${alert.symbol ?? 'USDC'} finalized on ${alert.blockchain ?? 'network'}.`,
+        duration: 8000,
+      });
+    }
+  }, [alert]);
 
   useEffect(() => {
     if (!incomingAlert?.txId) return;
@@ -212,15 +253,16 @@ export default function TabOneScreen() {
 
 
         {/* Alerts */}
-        {(alert || incomingAlert || finalizedAlert) && (
+        {(displayAlert || incomingAlert || finalizedAlert) && (
           <View style={styles.section}>
-            {alert?.state === 'CONFIRMED' && (
+            {displayAlert && (
               <AlertCard
-                type="info"
-                title="Incoming deposit"
-                message={`${alert.amount ?? '—'} ${alert.symbol ?? 'USDC'} on ${alert.blockchain ?? 'network'} confirmed. Finalizing…`}
+                type={displayAlert.type}
+                title={displayAlert.title}
+                message={displayAlert.message}
                 autoDismiss
-                duration={6000}
+                duration={displayAlert.duration}
+                onDismiss={() => setDisplayAlert(null)}
               />
             )}
             {incomingAlert?.txId && (

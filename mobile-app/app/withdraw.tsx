@@ -1,9 +1,11 @@
-import { Stack, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, StyleSheet, SafeAreaView } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 import { backendFetch } from '@/lib/backend';
 import { CHAIN_LABELS, type WithdrawChain, WITHDRAW_CHAINS } from '@/lib/chains';
+import Button from '@/components/ui/Button';
 
 const BASE_CHAIN: WithdrawChain = 'BASE-SEPOLIA';
 
@@ -87,116 +89,314 @@ export default function WithdrawScreen() {
   };
 
   return (
-    <ScrollView className="flex-1 bg-surface-0">
-      <Stack.Screen options={{ title: 'Withdraw' }} />
-      <View className="px-6 pt-6 pb-12">
-        <Pressable onPress={() => router.back()} className="mb-4">
-          <Text className="text-sm font-sans-semibold text-primary-600">Back</Text>
+    <SafeAreaView style={styles.container}>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Pressable onPress={() => router.back()} style={styles.backButton}>
+          <Ionicons name="chevron-back" size={20} color="#6366F1" />
+          <Text style={styles.backText}>Back</Text>
         </Pressable>
 
-        <Text className="text-2xl font-sans-bold text-ink-900">Withdraw USDC</Text>
-        <Text className="mt-2 text-sm font-sans text-ink-500">
-          Choose a destination chain and address. We’ll bridge from Base when needed.
-        </Text>
-
-        <View className="mt-6 rounded-3xl border border-stroke-100 bg-surface-1 p-5">
-          <Text className="text-xs font-sans-medium uppercase tracking-widest text-ink-500">
-            Destination chain
+        <View style={styles.header}>
+          <Text style={styles.title}>Withdraw USDC</Text>
+          <Text style={styles.subtitle}>
+            Choose a destination chain and address. We'll bridge from Base when needed.
           </Text>
-          <View className="mt-3">
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Destination chain</Text>
+          <View style={styles.chainContainer}>
             {WITHDRAW_CHAINS.map((chain) => {
               const active = chain === destinationChain;
               return (
                 <Pressable
                   key={chain}
+                  style={[styles.chainButton, active && styles.chainButtonActive]}
                   onPress={() => setDestinationChain(chain)}
-                  className={`mb-2 flex-row items-center justify-between rounded-2xl border px-4 py-3 ${
-                    active
-                      ? 'border-primary-200 bg-primary-50'
-                      : 'border-stroke-100 bg-white'
-                  }`}
                 >
-                  <Text className={`text-sm font-sans-semibold ${active ? 'text-primary-700' : 'text-ink-700'}`}>
-                    {CHAIN_LABELS[chain]}
-                  </Text>
-                  {active ? <Text className="text-xs font-sans text-primary-700">Selected</Text> : null}
+                  <View style={styles.chainRow}>
+                    <Text style={[styles.chainName, active && styles.chainNameActive]}>
+                      {CHAIN_LABELS[chain]}
+                    </Text>
+                    {active && (
+                      <Ionicons name="checkmark-circle" size={18} color="#6366F1" />
+                    )}
+                  </View>
                 </Pressable>
               );
             })}
           </View>
         </View>
 
-        <View className="mt-6 rounded-3xl border border-stroke-100 bg-surface-1 p-5">
-          <Text className="text-xs font-sans-medium uppercase tracking-widest text-ink-500">
-            Recipient address
-          </Text>
+        <View style={styles.card}>
+          <Text style={styles.label}>Recipient address</Text>
           <TextInput
             value={recipientAddress}
             onChangeText={setRecipientAddress}
             placeholder="0x... or Solana address"
-            placeholderTextColor="#9AA4B2"
+            placeholderTextColor="#94A3B8"
             autoCapitalize="none"
-            className="mt-3 rounded-2xl border border-stroke-100 bg-white px-4 py-3 text-sm font-sans text-ink-900"
+            style={styles.textInput}
           />
 
-          <Text className="mt-5 text-xs font-sans-medium uppercase tracking-widest text-ink-500">
-            Amount (USDC)
-          </Text>
-          <TextInput
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-            placeholderTextColor="#9AA4B2"
-            className="mt-3 rounded-2xl border border-stroke-100 bg-white px-4 py-3 text-sm font-sans text-ink-900"
-          />
+          <View style={styles.divider} />
+
+          <Text style={styles.label}>Amount (USDC)</Text>
+          <View style={styles.amountInputContainer}>
+            <Text style={styles.currencySymbol}>$</Text>
+            <TextInput
+              style={styles.amountInput}
+              value={amount}
+              onChangeText={setAmount}
+              keyboardType="decimal-pad"
+              placeholder="0.00"
+              placeholderTextColor="#94A3B8"
+            />
+          </View>
         </View>
 
-        <View className="mt-6 rounded-3xl border border-stroke-100 bg-surface-1 p-5">
-          <Text className="text-xs font-sans-medium uppercase tracking-widest text-ink-500">
-            Estimated fees
-          </Text>
+        <View style={styles.card}>
+          <View style={styles.feesHeader}>
+            <Ionicons name="wallet-outline" size={20} color="#6366F1" />
+            <Text style={styles.feesTitle}>Estimated fees</Text>
+          </View>
+          
           {isBase ? (
-            <Text className="mt-3 text-sm font-sans text-ink-700">
+            <Text style={styles.feesText}>
               Direct transfer on Base. Standard network fees apply.
             </Text>
           ) : isEstimating ? (
-            <View className="mt-3 flex-row items-center">
-              <ActivityIndicator />
-              <Text className="ml-3 text-sm font-sans text-ink-500">Estimating…</Text>
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color="#6366F1" />
+              <Text style={styles.loadingText}>Estimating…</Text>
             </View>
           ) : estimateError ? (
-            <Text className="mt-3 text-sm font-sans text-ink-500">
+            <Text style={styles.feesText}>
               Estimation unavailable right now.
             </Text>
           ) : providerFee ? (
-            <Text className="mt-3 text-sm font-sans text-ink-700">
+            <Text style={styles.feesText}>
               Provider fee: {providerFee} USDC
             </Text>
           ) : (
-            <Text className="mt-3 text-sm font-sans text-ink-500">No fee estimate yet.</Text>
+            <Text style={styles.feesText}>No fee estimate yet.</Text>
           )}
         </View>
 
         {submitError ? (
-          <Text className="mt-4 text-sm font-sans text-danger-500">{submitError}</Text>
-        ) : null}
-        {submitSuccess ? (
-          <Text className="mt-4 text-sm font-sans text-success-500">{submitSuccess}</Text>
+          <View style={styles.errorContainer}>
+            <Ionicons name="alert-circle" size={18} color="#EF4444" />
+            <Text style={styles.errorText}>{submitError}</Text>
+          </View>
         ) : null}
 
-        <Pressable
+        {submitSuccess ? (
+          <View style={styles.successContainer}>
+            <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+            <Text style={styles.successText}>{submitSuccess}</Text>
+          </View>
+        ) : null}
+
+        <Button
+          label={isSubmitting ? 'Submitting…' : 'Withdraw'}
           onPress={handleSubmit}
           disabled={!canSubmit}
-          className={`mt-6 rounded-2xl py-4 ${
-            canSubmit ? 'bg-primary-600' : 'bg-stroke-100'
-          }`}
-        >
-          <Text className={`text-center text-sm font-sans-semibold ${canSubmit ? 'text-white' : 'text-ink-300'}`}>
-            {isSubmitting ? 'Submitting…' : 'Withdraw'}
-          </Text>
-        </Pressable>
-      </View>
-    </ScrollView>
+          loading={isSubmitting}
+        />
+
+        <View style={styles.bottomPadding} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingTop: 40,
+    paddingHorizontal: 20,
+    paddingBottom: 100,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  backText: {
+    fontSize: 15,
+    fontFamily: 'Inter_500Medium',
+    color: '#6366F1',
+    marginLeft: 4,
+  },
+  header: {
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 28,
+    fontFamily: 'Inter_700Bold',
+    color: '#0F172A',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  label: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 12,
+  },
+  chainContainer: {
+    gap: 8,
+  },
+  chainButton: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  chainButtonActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#6366F1',
+  },
+  chainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  chainName: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#0F172A',
+  },
+  chainNameActive: {
+    color: '#6366F1',
+  },
+  textInput: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+    fontFamily: 'Inter_500Medium',
+    color: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 20,
+  },
+  amountInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  currencySymbol: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#6366F1',
+    marginRight: 6,
+  },
+  amountInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#0F172A',
+  },
+  feesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  feesTitle: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#0F172A',
+    marginLeft: 10,
+  },
+  feesText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+    lineHeight: 20,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+    marginLeft: 12,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+    marginBottom: 16,
+  },
+  errorText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#EF4444',
+    flex: 1,
+  },
+  successContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    marginBottom: 16,
+  },
+  successText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#10B981',
+    flex: 1,
+  },
+  bottomPadding: {
+    height: 100,
+  },
+});

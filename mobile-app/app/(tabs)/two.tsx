@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { firestore } from '@/lib/firebase';
 import { useAuthStore } from '@/store/authStore';
+import { AddressCardProps } from '@/components/ui/types';
 
 type UserDoc = {
   circle?: {
@@ -15,16 +16,7 @@ type UserDoc = {
   };
 };
 
-type AddressCardProps = {
-  title: string;
-  address: string | null;
-  networks: string[];
-  icon: string;
-  iconColor: string;
-  imageSource?: ImageSourcePropType;
-};
-
-function AddressCard({ title, address, networks, icon, iconColor, imageSource }: AddressCardProps) {
+function AddressCard({ title, address, networks, icon, iconColor, isSvgIcon, imageSource }: AddressCardProps & { imageSource?: ImageSourcePropType }) {
   const [copied, setCopied] = useState(false);
 
   const copyAddress = async () => {

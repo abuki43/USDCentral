@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, Text, View, StyleSheet, ScrollView } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, Text, View, StyleSheet, ScrollView, Image } from 'react-native';
 import { Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/store/authStore';
@@ -47,11 +47,11 @@ export default function LoginScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logo}>
-              <Text style={styles.logoText}>$</Text>
-            </View>
-          </View>
+          <Image 
+            source={require('@/assets/images/logo.png')} 
+            style={styles.logoImage} 
+            resizeMode="contain"
+          />
           <Text style={styles.title}>Welcome back</Text>
           <Text style={styles.subtitle}>Sign in to continue to USDCentral</Text>
         </View>
@@ -101,19 +101,6 @@ export default function LoginScreen() {
             loading={isSubmitting}
           />
 
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or continue with</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <Button
-            label="Continue with Google"
-            variant="secondary"
-            onPress={() => {}}
-            icon={<Ionicons name="logo-google" size={20} color="#0F172A" />}
-          />
-
           <View style={styles.footer}>
             <Text style={styles.footerText}>New here?</Text>
             <Link href="/(auth)/register" asChild>
@@ -143,25 +130,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 40,
   },
-  logoContainer: {
+  logoImage: {
+    width: 120,
+    height: 120,
     marginBottom: 24,
-  },
-  logo: {
-    width: 72,
-    height: 72,
-    borderRadius: 24,
-    backgroundColor: '#6366F1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-  },
-  logoText: {
-    fontSize: 36,
-    fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
   },
   title: {
     fontSize: 28,
@@ -201,22 +173,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Inter_500Medium',
     color: '#6366F1',
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 8,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#E2E8F0',
-  },
-  dividerText: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#94A3B8',
-    marginHorizontal: 16,
   },
   footer: {
     flexDirection: 'row',

@@ -1,13 +1,7 @@
 import { TextInput, Text, View, StyleSheet, TextInputProps } from 'react-native';
 import { useState, forwardRef } from 'react';
 import { StyleProp, ViewStyle } from 'react-native';
-
-type InputProps = TextInputProps & {
-  label: string;
-  error?: string;
-  icon?: React.ReactNode;
-  containerStyle?: StyleProp<ViewStyle>;
-};
+import { InputProps } from './types';
 
 export default forwardRef<TextInput, InputProps>(function Input({ label, error, icon, containerStyle, ...props }, ref) {
   const [isFocused, setIsFocused] = useState(false);

@@ -1,21 +1,9 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
+import { TransactionItemProps, TransactionType, TransactionConfig, StatusConfig } from './types';
 
-type TransactionType = 'DEPOSIT' | 'WITHDRAW' | 'SEND' | 'RECEIVE' | 'SWAP' | 'BRIDGE' | 'EARN';
-
-type TransactionItemProps = {
-  id: string;
-  type: TransactionType;
-  amount: string;
-  symbol?: string;
-  destination?: string;
-  status: 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'FAILED' | 'BRIDGING';
-  timestamp: string;
-  onPress?: () => void;
-};
-
-const TYPE_CONFIG: Record<TransactionType, { icon: any; color: string; label: string }> = {
+const TYPE_CONFIG: Record<TransactionType, TransactionConfig> = {
   DEPOSIT: { icon: 'arrow-down-circle', color: '#10B981', label: 'Deposit' },
   WITHDRAW: { icon: 'arrow-up-circle', color: '#F59E0B', label: 'Withdraw' },
   SEND: { icon: 'send', color: '#6366F1', label: 'Sent' },
@@ -25,7 +13,7 @@ const TYPE_CONFIG: Record<TransactionType, { icon: any; color: string; label: st
   EARN: { icon: 'trending-up', color: '#14B8A6', label: 'Earn' },
 };
 
-const STATUS_CONFIG = {
+const STATUS_CONFIG: Record<string, StatusConfig> = {
   PENDING: { color: '#F59E0B', label: 'Pending' },
   CONFIRMED: { color: '#6366F1', label: 'Confirmed' },
   COMPLETED: { color: '#10B981', label: 'Completed' },

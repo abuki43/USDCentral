@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, Text, View, StyleSheet, ScrollView } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, Text, View, StyleSheet, ScrollView, Image } from 'react-native';
 import { Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/store/authStore';
@@ -22,7 +22,12 @@ export default function RegisterScreen() {
     return null;
   }
 
-  const disabled = isSubmitting || !email.trim() || !password || !displayName.trim();
+  const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const isPasswordValid = password.length >= 8 && /[A-Z]/.test(password);
+  const isDisplayNameValid = displayName.trim().length > 0;
+  const isFormValid = isEmailValid && isPasswordValid && isDisplayNameValid;
+
+  const disabled = isSubmitting || !isFormValid;
 
   const nameIcon = useMemo(() => (
     <Ionicons name="person-outline" size={20} color="#94A3B8" />
@@ -52,11 +57,11 @@ export default function RegisterScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logo}>
-              <Text style={styles.logoText}>$</Text>
-            </View>
-          </View>
+          <Image 
+            source={require('@/assets/images/logo.png')} 
+            style={styles.logoImage} 
+            resizeMode="contain"
+          />
           <Text style={styles.title}>Create account</Text>
           <Text style={styles.subtitle}>Start building your unified USDC balance</Text>
         </View>
@@ -160,25 +165,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 40,
   },
-  logoContainer: {
+  logoImage: {
+    width: 120,
+    height: 120,
     marginBottom: 24,
-  },
-  logo: {
-    width: 72,
-    height: 72,
-    borderRadius: 24,
-    backgroundColor: '#6366F1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-  },
-  logoText: {
-    fontSize: 36,
-    fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
   },
   title: {
     fontSize: 28,

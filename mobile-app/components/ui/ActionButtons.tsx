@@ -1,13 +1,7 @@
 import { View, Pressable, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-
-type ActionButton = {
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  variant: 'withdraw' | 'send' | 'deposit';
-  onPress?: () => void;
-};
+import { ActionButton, ActionVariant } from './types';
 
 const ACTIONS: Omit<ActionButton, 'onPress'>[] = [
   { label: 'Withdraw', icon: 'arrow-down-circle', variant: 'withdraw' },
@@ -31,7 +25,7 @@ const getIconStyle = (variant: string) => {
 export default function ActionButtons() {
   const router = useRouter();
 
-  const handlePress = (variant: ActionButton['variant']) => {
+  const handlePress = (variant: ActionVariant) => {
     switch (variant) {
       case 'withdraw':
         router.push('/withdraw');
@@ -70,22 +64,21 @@ export default function ActionButtons() {
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    justifyContent: 'space-around', // Changed from gap to space-around for better distribution
+    justifyContent: 'space-around', 
     marginBottom: 24,
-    marginTop: 32, // Increased top margin to clear the card's glow effect (20px)
+    marginTop: 32, 
   },
   button: {
-    // flex: 1, // Removed flex: 1 to prevent stretching
+
     alignItems: 'center',
-    padding: 8, // Reduced padding
-    // Removed background and shadows to make it "perfect" and clean
+    padding: 8,
   },
   buttonPressed: {
     opacity: 0.8,
     transform: [{ scale: 0.96 }],
   },
   iconContainer: {
-    width: 48, // Slightly smaller icons
+    width: 48, 
     height: 48,
     borderRadius: 24,
     alignItems: 'center',

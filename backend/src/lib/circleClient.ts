@@ -1,8 +1,9 @@
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
+import { config } from "../config.js";
 
 export const getCircleClient = () => {
-  const apiKey = process.env.CIRCLE_API_KEY;
-  const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
+  const apiKey = config.CIRCLE_API_KEY;
+  const entitySecret = config.CIRCLE_ENTITY_SECRET;
   const baseUrl = process.env.CIRCLE_BASE_URL;
 
   if (!apiKey || !entitySecret) {

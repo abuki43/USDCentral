@@ -16,8 +16,8 @@ const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 const FAILED_STATES = new Set(["FAILED", "CANCELLED", "DENIED", "REJECTED"]);
 const DONE_STATES = new Set(["CONFIRMED", "COMPLETE", "COMPLETED"]);
 
-const positionManagerAddress = process.env.UNISWAP_V3_POSITION_MANAGER_ADDRESS;
-const baseSepoliaRpcUrl = process.env.BASE_SEPOLIA_RPC_URL;
+const positionManagerAddress = config.UNISWAP_V3_POSITION_MANAGER_ADDRESS;
+const baseSepoliaRpcUrl = config.BASE_SEPOLIA_RPC_URL;
 
 const erc721Iface = new ethers.Interface([
   "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)",
@@ -46,6 +46,104 @@ const sanitizeForFirestore = (value: unknown) =>
       return v;
     }),
   );
+
+const getBridgeDestinationTxHash = (result: any) => {
+  const steps = result?.steps ?? result?.result?.steps ?? [];
+  if (!Array.isArray(steps)) return null;
+  const mintStep = steps.find((step: any) => step?.name === "mint");
+  const txHash = mintStep?.txHash ?? mintStep?.data?.txHash ?? null;
+  return typeof txHash === "string" ? txHash : null;
+};
+
+const parseLiquidityRefId = (refId: string) => {
+  const parts = refId.split(":");
+  return {
+    kind: parts[0] ?? null,
+    uid: parts[1] ?? null,
+    positionId: parts[2] ?? null,
+  };
+};
+
+const handleLiquidityCollect = async (params: { uid: string; tx: any }) => {
+  const { uid, tx } = params;
+  const refId = (tx.refId as string | undefined) ?? "";
+  const parsed = parseLiquidityRefId(refId);
+  const positionId = parsed.positionId;
+  if (!positionId) return;
+
+  const status = isFailedState(tx.state)
+    ? "FAILED"
+    : isDoneState(tx.state)
+      ? "COMPLETED"
+      : "PENDING";
+
+  await upsertTransaction(uid, `earn:${positionId}:collect`, {
+    kind: "EARN",
+    status,
+    amount: "0",
+    symbol: "USDC",
+    blockchain: tx.blockchain ?? null,
+    relatedTxId: tx.id,
+    txHash: tx.txHash ?? null,
+    metadata: {
+      action: "COLLECT_FEES",
+      positionId,
+    },
+  });
+
+  if (isDoneState(tx.state)) {
+    await firestoreAdmin
+      .collection("users")
+      .doc(uid)
+      .collection("positions")
+      .doc(positionId)
+      .set(
+        {
+          lastCollectAt: serverTimestamp(),
+          status: "ACTIVE",
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+  }
+};
+
+const handleLiquidityDecrease = async (params: { uid: string; tx: any }) => {
+  const { uid, tx } = params;
+  const refId = (tx.refId as string | undefined) ?? "";
+  const parsed = parseLiquidityRefId(refId);
+  const positionId = parsed.positionId;
+  if (!positionId) return;
+
+  const status = isFailedState(tx.state)
+    ? "FAILED"
+    : isDoneState(tx.state)
+      ? "COMPLETED"
+      : "PENDING";
+
+  await upsertTransaction(uid, `earn:${positionId}:withdraw`, {
+    kind: "EARN",
+    status,
+    amount: "0",
+    symbol: "USDC",
+    blockchain: tx.blockchain ?? null,
+    relatedTxId: tx.id,
+    txHash: tx.txHash ?? null,
+    metadata: {
+      action: "WITHDRAW_LIQUIDITY",
+      positionId,
+    },
+  });
+
+  if (isDoneState(tx.state)) {
+    await firestoreAdmin
+      .collection("users")
+      .doc(uid)
+      .collection("positions")
+      .doc(positionId)
+      .delete();
+  }
+};
 
 
 const getTokenInfo = async (circle: ReturnType<typeof getCircleClient>, tokenId?: string) => {
@@ -106,14 +204,44 @@ const handleOutboundTransaction = async (params: {
   });
 };
 
-const handleContractExecution = async (tx: any) => {
+const handleContractExecution = async (params: { tx: any; uid?: string }) => {
+  const { tx, uid } = params;
   const isComplete = isDoneState(tx.state);
-  if (!isComplete || !tx.txHash || !positionManagerAddress || !baseSepoliaRpcUrl) return;
+  if (!isComplete || !tx.txHash || !positionManagerAddress || !baseSepoliaRpcUrl) {
+    console.warn("[liquidity] contract execution skipped", {
+      txId: tx.id,
+      state: tx.state ?? null,
+      isComplete,
+      hasTxHash: Boolean(tx.txHash),
+      hasPositionManagerAddress: Boolean(positionManagerAddress),
+      hasBaseSepoliaRpcUrl: Boolean(baseSepoliaRpcUrl),
+    });
+    return;
+  }
+
+  console.info("[liquidity] contract execution started", {
+    txId: tx.id,
+    state: tx.state ?? null,
+    txHash: tx.txHash ?? null,
+    positionManagerAddress,
+  });
 
   try {
     const provider = new ethers.JsonRpcProvider(baseSepoliaRpcUrl);
     const receipt = await provider.getTransactionReceipt(tx.txHash as string);
-    if (!receipt) return;
+    if (!receipt) {
+      console.warn("[liquidity] receipt not found", {
+        txId: tx.id,
+        txHash: tx.txHash ?? null,
+      });
+      return;
+    }
+
+    console.info("[liquidity] receipt fetched", {
+      txId: tx.id,
+      txHash: tx.txHash ?? null,
+      logsCount: receipt.logs?.length ?? 0,
+    });
 
     const tokenIds: string[] = [];
     for (const log of receipt.logs) {
@@ -130,10 +258,41 @@ const handleContractExecution = async (tx: any) => {
 
     if (tokenIds.length === 0) return;
 
-    const snap = await firestoreAdmin
-      .collectionGroup("positions")
-      .where("mintCircleTxId", "==", tx.id)
-      .get();
+    console.info("[liquidity] token ids extracted", {
+      txId: tx.id,
+      txHash: tx.txHash ?? null,
+      tokenIds,
+    });
+
+    let snap;
+    try {
+      if (uid) {
+        snap = await firestoreAdmin
+          .collection("users")
+          .doc(uid)
+          .collection("positions")
+          .where("mintCircleTxId", "==", tx.id)
+          .get();
+      } else {
+        snap = await firestoreAdmin
+          .collectionGroup("positions")
+          .where("mintCircleTxId", "==", tx.id)
+          .get();
+      }
+    } catch (error) {
+      console.error("[liquidity] position lookup failed", {
+        txId: tx.id,
+        uid: uid ?? null,
+        error: (error as Error)?.message,
+      });
+      throw error;
+    }
+
+    console.info("[liquidity] positions matched", {
+      txId: tx.id,
+      uid: uid ?? null,
+      matches: snap.size,
+    });
 
     const updates = snap.docs.map((doc, index) =>
       doc.ref.set(
@@ -173,6 +332,7 @@ export const processBridgeToBaseJob = async (params: BridgeToBaseJob) => {
     });
 
     const safeResult = sanitizeForFirestore(result);
+    const destinationTxHash = getBridgeDestinationTxHash(result);
 
     await depositRef.set(
       {
@@ -181,14 +341,15 @@ export const processBridgeToBaseJob = async (params: BridgeToBaseJob) => {
           sourceChain,
           destinationChain: BASE_DESTINATION_CHAIN,
           result: safeResult,
+          destinationTxHash,
           updatedAt: serverTimestamp(),
         },
       },
       { merge: true },
     );
 
-    await upsertTransaction(uid, `bridge:${txId}`, {
-      kind: "BRIDGE",
+    await upsertTransaction(uid, txId, {
+      kind: "DEPOSIT",
       status: "COMPLETED",
       amount,
       symbol,
@@ -196,6 +357,7 @@ export const processBridgeToBaseJob = async (params: BridgeToBaseJob) => {
       sourceChain,
       destinationChain: BASE_DESTINATION_CHAIN,
       relatedTxId: txId,
+      metadata: { bridged: true },
     });
 
     const alertRef = getAlertRef(uid, "inboundUSDC");
@@ -234,8 +396,8 @@ export const processBridgeToBaseJob = async (params: BridgeToBaseJob) => {
       { merge: true },
     );
 
-    await upsertTransaction(uid, `bridge:${txId}`, {
-      kind: "BRIDGE",
+    await upsertTransaction(uid, txId, {
+      kind: "DEPOSIT",
       status: "FAILED",
       amount,
       symbol,
@@ -243,7 +405,7 @@ export const processBridgeToBaseJob = async (params: BridgeToBaseJob) => {
       sourceChain,
       destinationChain: BASE_DESTINATION_CHAIN,
       relatedTxId: txId,
-      metadata: { error: (error as Error)?.message },
+      metadata: { bridged: true, error: (error as Error)?.message },
     });
   }
 };
@@ -259,15 +421,36 @@ const handleInboundTransaction = async (params: {
   const { symbol, tokenAddress, decimals, isUsdc } = tokenInfo;
   const state = normalizeState(tx.state);
 
+  const chain = (tx.blockchain ?? null) as string | null;
+  const isBase = chain === BASE_DESTINATION_CHAIN;
+  let depositId = tx.id as string;
+
+  if (isBase && tx.txHash) {
+    const bridgedSnap = await firestoreAdmin
+      .collection("users")
+      .doc(uid)
+      .collection("deposits")
+      .where("bridge.destinationTxHash", "==", tx.txHash)
+      .limit(1)
+      .get();
+
+    if (!bridgedSnap.empty && bridgedSnap.docs.length > 0) {
+      const [firstDoc] = bridgedSnap.docs;
+      if (firstDoc) {
+        depositId = firstDoc.id;
+      }
+    }
+  }
+
   const depositRef = firestoreAdmin
     .collection("users")
     .doc(uid)
     .collection("deposits")
-    .doc(tx.id as string);
+    .doc(depositId);
 
   await depositRef.set(
     {
-      id: tx.id,
+      id: depositId,
       walletId: tx.walletId ?? null,
       blockchain: tx.blockchain ?? null,
       txHash: tx.txHash ?? null,
@@ -282,7 +465,7 @@ const handleInboundTransaction = async (params: {
     { merge: true },
   );
 
-  await upsertTransaction(uid, tx.id, {
+  await upsertTransaction(uid, depositId, {
     kind: "DEPOSIT",
     status: state === "CONFIRMED" ? "CONFIRMED" : "PENDING",
     amount,
@@ -296,14 +479,12 @@ const handleInboundTransaction = async (params: {
   const existingBridgeStatus = depositSnap.data()?.bridge?.status as string | undefined;
 
   const alertRef = getAlertRef(uid, "inboundUSDC");
-  const chain = (tx.blockchain ?? null) as string | null;
-  const isBase = chain === BASE_DESTINATION_CHAIN;
 
   if (isUsdc && state === "CONFIRMED") {
     if (isBase) {
       await alertRef.set(
         {
-          txId: tx.id,
+          txId: depositId,
           state,
           blockchain: tx.blockchain ?? null,
           amount,
@@ -325,8 +506,8 @@ const handleInboundTransaction = async (params: {
         { merge: true },
       );
 
-      await upsertTransaction(uid, `bridge:${tx.id}`, {
-        kind: "BRIDGE",
+      await upsertTransaction(uid, tx.id, {
+        kind: "DEPOSIT",
         status: "BRIDGING",
         amount,
         symbol,
@@ -334,6 +515,7 @@ const handleInboundTransaction = async (params: {
         sourceChain: tx.blockchain ?? null,
         destinationChain: BASE_DESTINATION_CHAIN,
         relatedTxId: tx.id,
+        metadata: { bridged: true },
       });
 
       await enqueueBridgeToBaseJob(
@@ -399,6 +581,19 @@ export const handleCircleWebhookTransaction = async (params: {
   const { uid, tx, circle } = params;
 
   if (tx.transactionType === "OUTBOUND") {
+    const refId = (tx.refId as string | undefined) ?? "";
+    if (refId.startsWith("liquidity-mint:")) {
+      await handleContractExecution({ tx, uid });
+      return;
+    }
+    if (refId.startsWith("liquidity-collect:")) {
+      await handleLiquidityCollect({ uid, tx });
+      return;
+    }
+    if (refId.startsWith("liquidity-decrease:")) {
+      await handleLiquidityDecrease({ uid, tx });
+      return;
+    }
     const amount = (tx.amounts?.[0] as string | undefined) ?? "0";
     const tokenInfo = await getTokenInfo(circle, tx.tokenId as string | undefined);
     await handleOutboundTransaction({
@@ -411,7 +606,7 @@ export const handleCircleWebhookTransaction = async (params: {
   }
 
   if (tx.transactionType === "CONTRACT_EXECUTION") {
-    await handleContractExecution(tx);
+    await handleContractExecution({ tx, uid });
     return;
   }
 

@@ -1,17 +1,6 @@
 import { Pressable, Text, ViewStyle, StyleProp, ActivityIndicator } from 'react-native';
 import { ReactNode } from 'react';
-
-type ButtonProps = {
-  label: string;
-  onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'success';
-  size?: 'sm' | 'md' | 'lg';
-  icon?: ReactNode;
-  disabled?: boolean;
-  loading?: boolean;
-  style?: StyleProp<ViewStyle>;
-  fullWidth?: boolean;
-};
+import { ButtonProps } from './types';
 
 export default function Button({
   label,

@@ -3,12 +3,6 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, StyleS
 
 import { useLiquidityStore, type RangePreset } from '@/store/liquidityStore';
 
-const PRESETS: { label: string; value: RangePreset; helper: string }[] = [
-  { label: 'Narrow', value: 'narrow', helper: 'Higher fees, more range risk' },
-  { label: 'Balanced', value: 'balanced', helper: 'Recommended for stable pairs' },
-  { label: 'Wide', value: 'wide', helper: 'Lower fees, safer range' },
-];
-
 export default function EarnScreen() {
   const {
     isLoading,
@@ -23,7 +17,7 @@ export default function EarnScreen() {
   } = useLiquidityStore();
 
   const [amount, setAmount] = useState('');
-  const [preset, setPreset] = useState<RangePreset>('balanced');
+  const preset: RangePreset = 'balanced';
 
   useEffect(() => {
     loadPositions().catch(() => undefined);
@@ -51,25 +45,6 @@ export default function EarnScreen() {
             placeholderTextColor="#9AA4B2"
             style={styles.input}
           />
-
-          <Text style={styles.label}>Range preset</Text>
-          <View style={styles.presetsContainer}>
-            {PRESETS.map((item) => {
-              const active = item.value === preset;
-              return (
-                <Pressable
-                  key={item.value}
-                  onPress={() => setPreset(item.value)}
-                  style={[styles.presetButton, active && styles.presetButtonActive]}
-                >
-                  <Text style={[styles.presetLabel, active && styles.presetLabelActive]}>
-                    {item.label}
-                  </Text>
-                  <Text style={styles.presetHelper}>{item.helper}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
 
           <View style={styles.buttonRow}>
             <Pressable

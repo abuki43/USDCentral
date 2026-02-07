@@ -1,13 +1,7 @@
 import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-
-type BalanceCardProps = {
-  balance: string;
-  symbol?: string;
-  onHideToggle?: () => void;
-  hidden?: boolean;
-};
+import { BalanceCardProps } from './types';
 
 export default function BalanceCard({ 
   balance, 
@@ -46,7 +40,7 @@ export default function BalanceCard({
           <View style={styles.balanceRow}>
             <Text style={styles.currencySign}>$</Text>
             <Text style={styles.balance}>
-              {isHidden ? '••••••' : balance}
+              {isHidden ? '••••••' : parseFloat(balance || '0').toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </Text>
           </View>
         </View>

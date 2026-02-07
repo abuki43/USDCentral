@@ -1,36 +1,25 @@
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef } from 'react';
+import { AlertCardProps, AlertConfig, AlertType } from './types';
 
-type AlertType = 'success' | 'warning' | 'info';
-
-type AlertCardProps = {
-  type: AlertType;
-  title: string;
-  message: string;
-  icon?: keyof typeof Ionicons.glyphMap;
-  onDismiss?: () => void;
-  autoDismiss?: boolean;
-  duration?: number;
-};
-
-const ALERT_CONFIG = {
+const ALERT_CONFIG: Record<AlertType, AlertConfig> = {
   success: {
-    icon: 'checkmark-circle' as const,
+    icon: 'checkmark-circle',
     bgColor: '#ECFDF5',
     borderColor: '#10B981',
     iconColor: '#10B981',
     textColor: '#047857',
   },
   warning: {
-    icon: 'alert-circle' as const,
+    icon: 'alert-circle',
     bgColor: '#FFF7ED',
     borderColor: '#F59E0B',
     iconColor: '#F59E0B',
     textColor: '#B45309',
   },
   info: {
-    icon: 'information-circle' as const,
+    icon: 'information-circle',
     bgColor: '#EEF2FF',
     borderColor: '#6366F1',
     iconColor: '#6366F1',
