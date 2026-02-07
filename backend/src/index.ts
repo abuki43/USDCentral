@@ -1,5 +1,4 @@
 import cors from "cors";
-import dotenv from "dotenv";
 import express from "express";
 
 import authRouter from "./routes/auth.route.js";
@@ -9,9 +8,12 @@ import liquidityRouter from "./routes/liquidity.route.js";
 import transferRouter from "./routes/transfer.route.js";
 import webhooksRouter from "./routes/webhooks.route.js";
 import { processPendingSwapJobsOnce } from "./services/swap.service.js";
-
-dotenv.config({ path: ".env.local" });
-dotenv.config();
+import { startQueueWorkers } from "./services/queue.service.js";
+import { processBridgeToBaseJob } from "./services/webhooks.service.js";
+import { config } from "./config.js";
+import { requestContext } from "./middleware/requestContext.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+import { logger } from "./lib/logger.js";
 
 
 
@@ -20,6 +22,7 @@ dotenv.config();
 const app = express();
 
 app.use(cors());
+app.use(requestContext);
 
 // Webhooks require the raw body for signature verification.
 app.use("/webhooks", webhooksRouter);
@@ -36,18 +39,30 @@ app.use("/bridge", bridgeRouter);
 app.use("/liquidity", liquidityRouter);
 app.use("/transfer", transferRouter);
 
-const port = Number(process.env.PORT) || 3000;
+const port = config.PORT;
+
+app.use(errorHandler);
 
 app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+    logger.info({ port }, "Server is running");
 
-    const enabled = (process.env.SWAP_WORKER_ENABLED ?? "true").toLowerCase() !== "false";
-    if (enabled) {
-        const intervalMs = Number(process.env.SWAP_WORKER_INTERVAL_MS ?? "5000");
+    startQueueWorkers({
+        bridgeToBase: processBridgeToBaseJob,
+        swapProcess: async () => {
+            await processPendingSwapJobsOnce({ limit: 1 });
+        },
+    }).catch((err) => {
+        logger.error({ err }, "Failed to start queue workers");
+    });
+
+    if (config.swapWorkerEnabled) {
+        const intervalMs = Number.isFinite(config.swapWorkerIntervalMs)
+            ? config.swapWorkerIntervalMs
+            : 5000;
         setInterval(() => {
             processPendingSwapJobsOnce({ limit: 3 }).catch((e) => {
-                console.error("swap worker error", (e as Error).message);
+                logger.error({ err: e }, "swap worker error");
             });
-        }, Number.isFinite(intervalMs) ? intervalMs : 5000);
+        }, intervalMs);
     }
 });

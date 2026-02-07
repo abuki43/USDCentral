@@ -1,0 +1,40 @@
+import dotenv from "dotenv";
+import { z } from "zod";
+
+dotenv.config({ path: ".env.local" });
+dotenv.config();
+
+const envSchema = z.object({
+  PORT: z.coerce.number().int().positive().default(3000),
+  NODE_ENV: z.string().optional(),
+  CIRCLE_API_KEY: z.string().optional(),
+  CIRCLE_ENTITY_SECRET: z.string().optional(),
+  FIREBASE_PROJECT_ID: z.string(),
+  FIREBASE_CLIENT_EMAIL: z.string(),
+  FIREBASE_PRIVATE_KEY: z.string(),
+  BASE_SEPOLIA_RPC_URL: z.string().optional(),
+  UNISWAP_V3_POSITION_MANAGER_ADDRESS: z.string().optional(),
+  UNISWAP_V3_POOL_ADDRESS: z.string().optional(),
+  UNISWAP_V3_POOL_TOKEN0_ADDRESS: z.string().optional(),
+  UNISWAP_V3_POOL_TOKEN1_ADDRESS: z.string().optional(),
+  UNISWAP_V3_POOL_FEE: z.string().optional(),
+  ENABLE_NON_USDC_SWAPS: z.string().optional(),
+  SWAP_WORKER_ENABLED: z.string().optional(),
+  SWAP_WORKER_INTERVAL_MS: z.string().optional(),
+  REDIS_URL: z.string().optional(),
+});
+
+const parsed = envSchema.safeParse(process.env);
+if (!parsed.success) {
+  const message = parsed.error.errors.map((err) => err.message).join("; ");
+  throw new Error(`Invalid environment configuration: ${message}`);
+}
+
+export const config = {
+  ...parsed.data,
+  FIREBASE_PRIVATE_KEY: parsed.data.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  enableNonUsdcSwaps: parsed.data.ENABLE_NON_USDC_SWAPS === "true",
+  swapWorkerEnabled:
+    (parsed.data.SWAP_WORKER_ENABLED ?? "true").toLowerCase() !== "false",
+  swapWorkerIntervalMs: Number(parsed.data.SWAP_WORKER_INTERVAL_MS ?? "5000"),
+};

@@ -1,8 +1,11 @@
 import { Router } from "express";
 
 import { requireAuth, type AuthenticatedRequest } from "../middleware/requireAuth.js";
+import { validateBody } from "../middleware/validate.js";
+import { bridgeEstimateSchema, bridgeWithdrawSchema } from "../schemas/bridge.schema.js";
 import { getCircleClient } from "../lib/circleClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
+import { upsertTransaction } from "../lib/transactions.js";
 import {
   BASE_DESTINATION_CHAIN,
   type SupportedChain,
@@ -12,6 +15,7 @@ import {
   bridgeUsdcFromBaseForUser,
   estimateBridgeUsdcFromBaseForUser,
 } from "../services/bridge.service.js";
+import { recomputeUnifiedUsdcBalance } from "../services/circle.service.js";
 
 const router = Router();
 
@@ -30,18 +34,14 @@ const sanitizeForFirestore = (value: unknown) =>
     }),
   );
 
-router.post("/estimate", requireAuth, async (req, res) => {
+router.post("/estimate", requireAuth, validateBody(bridgeEstimateSchema), async (req, res) => {
   try {
     const { user } = req as AuthenticatedRequest;
-    const { destinationChain, recipientAddress, amount } = req.body as {
-      destinationChain?: SupportedChain;
-      recipientAddress?: string;
-      amount?: string;
+    const { destinationChain, recipientAddress, amount } = req.validatedBody as {
+      destinationChain: SupportedChain;
+      recipientAddress: string;
+      amount: string;
     };
-
-    if (!destinationChain || !recipientAddress || !amount) {
-      return res.status(400).json({ message: "Missing estimate parameters." });
-    }
 
     if (destinationChain === BASE_DESTINATION_CHAIN) {
       return res.json({ estimate: null, fees: [] });
@@ -67,18 +67,14 @@ router.post("/estimate", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/withdraw", requireAuth, async (req, res) => {
+router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async (req, res) => {
   try {
     const { user } = req as AuthenticatedRequest;
-    const { destinationChain, recipientAddress, amount } = req.body as {
-      destinationChain?: SupportedChain;
-      recipientAddress?: string;
-      amount?: string;
+    const { destinationChain, recipientAddress, amount } = req.validatedBody as {
+      destinationChain: SupportedChain;
+      recipientAddress: string;
+      amount: string;
     };
-
-    if (!destinationChain || !recipientAddress || !amount) {
-      return res.status(400).json({ message: "Missing withdraw parameters." });
-    }
 
     const userSnap = await firestoreAdmin.collection("users").doc(user.uid).get();
     const walletsByChain = (userSnap.data()?.circle?.walletsByChain ?? {}) as Record<
@@ -93,13 +89,49 @@ router.post("/withdraw", requireAuth, async (req, res) => {
       }
 
       const circle = getCircleClient();
+      const usdcTokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[BASE_DESTINATION_CHAIN];
+      const balances = await circle.getWalletTokenBalance({
+        id: baseWalletId,
+        tokenAddresses: [usdcTokenAddress],
+        includeAll: true,
+      });
+
+      const tokenBalance = balances.data?.tokenBalances?.find((entry: any) =>
+        (entry?.token?.tokenAddress as string | undefined)?.toLowerCase() ===
+        usdcTokenAddress.toLowerCase(),
+      );
+
+      const tokenId = tokenBalance?.token?.id as string | undefined;
+      if (!tokenId) {
+        return res.status(400).json({ message: "USDC tokenId not found for Base wallet." });
+      }
+
+      const refId = `withdraw:${user.uid}:${Date.now()}`;
       const transfer = await circle.createTransaction({
         walletId: baseWalletId,
-        tokenAddress: USDC_TOKEN_ADDRESS_BY_CHAIN[BASE_DESTINATION_CHAIN],
+        tokenId,
         destinationAddress: recipientAddress,
         amounts: [amount],
-        feeLevel: "LOW",
+        fee: { config: { feeLevel: "LOW" } },
+        refId,
       } as any);
+
+      const transferId = transfer?.data?.id ?? null;
+      const unifiedId = transferId ?? refId;
+
+      await upsertTransaction(user.uid, unifiedId, {
+        kind: "WITHDRAW",
+        status: "PENDING",
+        amount,
+        symbol: "USDC",
+        blockchain: BASE_DESTINATION_CHAIN,
+        relatedTxId: transferId ?? null,
+        metadata: {
+          destinationChain,
+          recipientAddress,
+          type: "DIRECT",
+        },
+      });
 
       await firestoreAdmin
         .collection("users")
@@ -114,15 +146,50 @@ router.post("/withdraw", requireAuth, async (req, res) => {
           createdAt: new Date().toISOString(),
         });
 
+      await recomputeUnifiedUsdcBalance(user.uid).catch(() => undefined);
       return res.json({ transfer: transfer.data });
     }
 
-    const result = await bridgeUsdcFromBaseForUser({
-      uid: user.uid,
-      destinationChain,
+    const withdrawId = `withdraw:${user.uid}:${Date.now()}`;
+    await upsertTransaction(user.uid, withdrawId, {
+      kind: "WITHDRAW",
+      status: "BRIDGING",
       amount,
-      recipientAddress,
+      symbol: "USDC",
+      blockchain: BASE_DESTINATION_CHAIN,
+      sourceChain: BASE_DESTINATION_CHAIN,
+      destinationChain,
+      metadata: {
+        recipientAddress,
+        type: "BRIDGE",
+      },
     });
+
+    let result: unknown;
+    try {
+      result = await bridgeUsdcFromBaseForUser({
+        uid: user.uid,
+        destinationChain,
+        amount,
+        recipientAddress,
+      });
+    } catch (error) {
+      await upsertTransaction(user.uid, withdrawId, {
+        kind: "WITHDRAW",
+        status: "FAILED",
+        amount,
+        symbol: "USDC",
+        blockchain: BASE_DESTINATION_CHAIN,
+        sourceChain: BASE_DESTINATION_CHAIN,
+        destinationChain,
+        metadata: {
+          recipientAddress,
+          type: "BRIDGE",
+          error: (error as Error).message,
+        },
+      });
+      throw error;
+    }
 
     const safeResult = sanitizeForFirestore(result);
 
@@ -138,6 +205,23 @@ router.post("/withdraw", requireAuth, async (req, res) => {
         result: safeResult,
         createdAt: new Date().toISOString(),
       });
+
+    await upsertTransaction(user.uid, withdrawId, {
+      kind: "WITHDRAW",
+      status: "COMPLETED",
+      amount,
+      symbol: "USDC",
+      blockchain: BASE_DESTINATION_CHAIN,
+      sourceChain: BASE_DESTINATION_CHAIN,
+      destinationChain,
+      metadata: {
+        recipientAddress,
+        type: "BRIDGE",
+        result: safeResult,
+      },
+    });
+
+    await recomputeUnifiedUsdcBalance(user.uid).catch(() => undefined);
 
     return res.json({ result: safeResult });
   } catch (error) {

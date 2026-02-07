@@ -6,6 +6,7 @@ import { getCircleClient } from "../lib/circleClient.js";
 import { EVM_CHAIN_ID_BY_CIRCLE_CHAIN, isSupportedEvmCircleChain } from "../lib/evmChains.js";
 import { lifiGetRoutes, lifiGetStepTransaction } from "../lib/lifiClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
+import { upsertTransaction } from "../lib/transactions.js";
 import { formatDecimalFromBaseUnits, parseBigintMaybeHex } from "../lib/units.js";
 import {
   SUPPORTED_EVM_CHAINS,
@@ -14,8 +15,10 @@ import {
   type SupportedChain,
 } from "../lib/usdcAddresses.js";
 import { recomputeUnifiedUsdcBalance } from "./circle.service.js";
+import { enqueueSwapProcessJob } from "./queue.service.js";
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
+
 
 type SwapJobStatus =
   | "QUEUED"
@@ -60,16 +63,40 @@ type SwapJobDoc = {
 };
 
 const logSwapError = (message: string, meta?: Record<string, unknown>) => {
-  // Keep logs as plain JSON-ish objects for easy searching.
   console.error(`[swap] ${message}`, meta ?? {});
 };
 
-// Temporary: LI.FI no longer supports testnets (as of 2026).
-// Skip auto-swapping on our testnet networks to avoid failed jobs.
+// Temporary: LI.FI no longer supports testnets 
+// Skip auto-swapping on testnet networks .
 const AUTO_SWAP_DISABLED_CHAINS = new Set<SupportedChain>([
   ...SUPPORTED_EVM_CHAINS,
   ...SUPPORTED_SOL_CHAINS,
 ]);
+
+const swapTransactionId = (depositTxId: string) => `swap:${depositTxId}`;
+
+const upsertSwapTransaction = async (
+  job: SwapJobDoc,
+  status: "PENDING" | "COMPLETED" | "FAILED",
+  extra?: { txHash?: string | null; error?: string | null },
+) => {
+  await upsertTransaction(job.uid, swapTransactionId(job.depositTxId), {
+    kind: "SWAP",
+    status,
+    amount: job.fromAmount,
+    symbol: job.fromTokenSymbol,
+    blockchain: job.blockchain,
+    txHash: extra?.txHash ?? null,
+    relatedTxId: job.depositTxId,
+    metadata: {
+      fromTokenAddress: job.fromTokenAddress,
+      fromTokenSymbol: job.fromTokenSymbol,
+      toTokenAddress: job.toTokenAddress,
+      toTokenSymbol: job.toTokenSymbol,
+      error: extra?.error ?? null,
+    },
+  });
+};
 
 const toBaseUnits = (amount: string, decimals: number) => {
   const [whole, fractionRaw = ""] = amount.split(".");
@@ -176,7 +203,7 @@ const submitCircleContractExecution = async (params: {
     contractAddress: params.contractAddress,
     callData: params.callData,
     ...(params.amount ? { amount: params.amount } : {}),
-    feeLevel: "MEDIUM",
+    fee: { config: { feeLevel: "MEDIUM" } },
     refId: params.refId,
   });
 
@@ -247,6 +274,29 @@ export const enqueueSameChainSwapToUsdc = async (input: {
     tx.create(jobRef, doc as any);
   });
 
+  await upsertSwapTransaction(
+    {
+      uid: input.uid,
+      depositTxId: input.depositTxId,
+      walletId: input.walletId,
+      blockchain: input.blockchain,
+      chainId,
+      fromTokenAddress,
+      fromTokenSymbol: input.tokenSymbol,
+      fromTokenDecimals: decimals,
+      fromAmount: input.amount,
+      fromAmountBaseUnits: baseUnits,
+      toTokenAddress,
+      toTokenSymbol: "USDC",
+      toTokenDecimals: 6,
+      status: "QUEUED",
+      error: null,
+    } as SwapJobDoc,
+    "PENDING",
+  );
+
+  await enqueueSwapProcessJob({ depositTxId: input.depositTxId });
+
   console.log("[swap] Enqueued same-chain swap to USDC", {
     depositTxId: input.depositTxId,
     uid: input.uid,
@@ -277,6 +327,7 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
       },
       { merge: true },
     );
+    await upsertSwapTransaction(job, "FAILED", { error: msg });
     return;
   }
 
@@ -336,6 +387,7 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
         { status: "FAILED", error: "Missing approvalCircleTxId.", updatedAt: serverTimestamp() },
         { merge: true },
       );
+      await upsertSwapTransaction(job, "FAILED", { error: "Missing approvalCircleTxId." });
       return;
     }
 
@@ -358,6 +410,7 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
         },
         { merge: true },
       );
+      await upsertSwapTransaction(job, "FAILED", { error: `Approval failed: ${state}` });
       return;
     }
 
@@ -378,6 +431,7 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
         { status: "FAILED", error: "Missing LI.FI step.", updatedAt: serverTimestamp() },
         { merge: true },
       );
+      await upsertSwapTransaction(job, "FAILED", { error: "Missing LI.FI step." });
       return;
     }
 
@@ -411,6 +465,9 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
         },
         { merge: true },
       );
+      await upsertSwapTransaction(job, "FAILED", {
+        error: "LI.FI did not return a transaction request (to/data).",
+      });
       return;
     }
 
@@ -447,11 +504,13 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
         { status: "FAILED", error: "Missing swapCircleTxId.", updatedAt: serverTimestamp() },
         { merge: true },
       );
+      await upsertSwapTransaction(job, "FAILED", { error: "Missing swapCircleTxId." });
       return;
     }
 
     const txResp = await (circle as any).getTransaction({ id: job.swapCircleTxId });
     const state = (txResp?.data?.transaction?.state as string | undefined) ?? "";
+    const txHash = (txResp?.data?.transaction?.txHash as string | undefined) ?? null;
     await jobRef.set({ lastCircleTxState: state, updatedAt: serverTimestamp() }, { merge: true });
 
     if (isCircleTxFailed(state)) {
@@ -469,12 +528,14 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
         },
         { merge: true },
       );
+      await upsertSwapTransaction(job, "FAILED", { error: `Swap failed: ${state}` });
       return;
     }
 
     if (!isCircleTxDone(state)) return;
 
     await jobRef.set({ status: "COMPLETED", updatedAt: serverTimestamp() }, { merge: true });
+    await upsertSwapTransaction(job, "COMPLETED", { txHash });
     await recomputeUnifiedUsdcBalance(job.uid).catch(() => undefined);
     return;
   }
@@ -523,6 +584,7 @@ export const processPendingSwapJobsOnce = async (opts?: { limit?: number }) => {
         },
         { merge: true },
       );
+      await upsertSwapTransaction(current, "FAILED", { error: err.message });
     } finally {
       await releaseLock(jobRef).catch(() => undefined);
     }

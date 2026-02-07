@@ -20,12 +20,16 @@
     "@circle-fin/bridge-kit": "^1.5.0",
     "@circle-fin/developer-controlled-wallets": "^10.1.0",
     "@lifi/sdk": "^3.12.8",
+    "bullmq": "^5.30.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "ethers": "^6.15.0",
     "express": "^5.2.1",
     "firebase-admin": "^12.7.0",
-    "mongoose": "^9.1.5"
+    "ioredis": "^5.4.1",
+    "mongoose": "^9.1.5",
+    "pino": "^9.5.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

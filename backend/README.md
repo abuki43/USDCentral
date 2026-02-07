@@ -27,6 +27,16 @@ The backend runs a small swap-job worker that picks up pending jobs from Firesto
 - `SWAP_WORKER_ENABLED` (default `true`)
 - `SWAP_WORKER_INTERVAL_MS` (default `5000`)
 
+### Optional queue workers (BullMQ)
+
+If `REDIS_URL` is set, the backend will enqueue bridge/swap jobs and run BullMQ workers automatically at startup.
+
+- `REDIS_URL` (e.g. `redis://localhost:6379`)
+
+### Logging
+
+- `LOG_LEVEL` (default `info`)
+
 ### Test endpoint
 
 ```bash
