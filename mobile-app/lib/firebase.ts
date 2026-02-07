@@ -1,7 +1,8 @@
 import Constants from 'expo-constants';
 import { FirebaseApp, getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, getReactNativePersistence, initializeAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 
 export type FirebaseClientConfig = {
   apiKey: string;
@@ -41,5 +42,14 @@ const resolvedConfig: FirebaseClientConfig = firebaseConfig ?? {
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(resolvedConfig);
 
 export const firebaseApp = app;
-export const firebaseAuth = getAuth(app);
+let authInstance;
+try {
+  authInstance = initializeAuth(app, {
+    persistence: getReactNativePersistence(ReactNativeAsyncStorage),
+  });
+} catch {
+  authInstance = getAuth(app);
+}
+
+export const firebaseAuth = authInstance;
 export const firestore = getFirestore(app);

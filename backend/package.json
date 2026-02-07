@@ -8,7 +8,8 @@
     "generate:entity-secret": "node --loader ts-node/esm --experimental-specifier-resolution=node src/scripts/generateEntitySecret.ts",
     "create:wallet-set": "node --loader ts-node/esm --experimental-specifier-resolution=node src/scripts/createWalletSet.ts",
     "start": "node --loader ts-node/esm --experimental-specifier-resolution=node src/index.ts",
-    "dev": "nodemon --watch 'src/**/*.ts' --exec 'node --loader ts-node/esm --experimental-specifier-resolution=node' src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "sweep:usdc": "tsx src/scripts/sweepUsdcToBase.ts"
   },
   "keywords": [],
   "author": "",
@@ -31,6 +32,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.2.0",
     "nodemon": "^3.1.11",
+    "tsx": "^4.19.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }

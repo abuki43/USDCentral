@@ -91,11 +91,11 @@ function RootLayoutNav() {
   const pathname = usePathname();
   const lastNavKeyRef = useRef<string | null>(null);
 
-  if (initializing || !isInitialized) {
-    return null;
-  }
-
   useEffect(() => {
+    if (initializing || !isInitialized) {
+      return;
+    }
+
     const shouldLock = Boolean(user && isEnabled && isLocked);
     const navKey = `${shouldLock}:${pathname}`;
 
@@ -115,6 +115,10 @@ function RootLayoutNav() {
       router.replace('/(tabs)');
     }
   }, [user, isEnabled, isLocked, pathname, router]);
+
+  if (initializing || !isInitialized) {
+    return null;
+  }
 
   return (
     <ThemeProvider value={DefaultTheme}>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { doc, onSnapshot } from 'firebase/firestore';
 
 import { backendFetch } from '@/lib/backend';
@@ -33,6 +34,7 @@ type CircleTransaction = {
 
 export default function TabOneScreen() {
   const { user } = useAuthStore();
+  const router = useRouter();
   const [balance, setBalance] = useState<string>('—');
   const [alert, setAlert] = useState<InboundAlertDoc | null>(null);
   const [transactions, setTransactions] = useState<CircleTransaction[]>([]);
@@ -92,6 +94,24 @@ export default function TabOneScreen() {
           Total USDC
         </Text>
         <Text className="text-4xl text-ink-900 font-sans-bold mt-2">{balance}</Text>
+
+        <View className="mt-5 flex-row gap-3">
+          <Pressable
+            className="flex-1 items-center justify-center rounded-2xl bg-primary-600 py-3 active:opacity-90"
+            onPress={() => router.push('/withdraw')}
+          >
+            <Text className="text-sm font-sans-semibold text-white">Withdraw</Text>
+          </Pressable>
+          <Pressable
+            className="flex-1 items-center justify-center rounded-2xl border border-stroke-100 bg-surface-1 py-3 active:opacity-90"
+            onPress={() => router.push('/send')}
+          >
+            <Text className="text-sm font-sans-semibold text-ink-700">Send</Text>
+          </Pressable>
+          <View className="flex-1 items-center justify-center rounded-2xl border border-stroke-100 bg-surface-1 py-3">
+            <Text className="text-sm font-sans-semibold text-ink-700">Deposit</Text>
+          </View>
+        </View>
 
         {alert?.state === 'CONFIRMED' ? (
           <View className="mt-5 bg-primary-50 border border-primary-100 rounded-3xl p-4">

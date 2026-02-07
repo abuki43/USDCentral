@@ -5,6 +5,8 @@ import express from "express";
 import authRouter from "./routes/auth.route.js";
 import bridgeRouter from "./routes/bridge.route.js";
 import circleRouter from "./routes/circle.route.js";
+import liquidityRouter from "./routes/liquidity.route.js";
+import transferRouter from "./routes/transfer.route.js";
 import webhooksRouter from "./routes/webhooks.route.js";
 import { processPendingSwapJobsOnce } from "./services/swap.service.js";
 
@@ -31,6 +33,8 @@ app.get("/", (_req, res) => {
 app.use("/auth", authRouter);
 app.use("/circle", circleRouter);
 app.use("/bridge", bridgeRouter);
+app.use("/liquidity", liquidityRouter);
+app.use("/transfer", transferRouter);
 
 const port = Number(process.env.PORT) || 3000;
 

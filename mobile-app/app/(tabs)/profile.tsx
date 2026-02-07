@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ScrollView, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import AuthTextInput from '@/components/AuthTextInput';
 import PrimaryButton from '@/components/PrimaryButton';
@@ -25,6 +26,7 @@ export default function ProfileScreen() {
   const [pin, setPinValue] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const handleSetPin = async () => {
     if (pin !== pinConfirm) {
@@ -45,6 +47,13 @@ export default function ProfileScreen() {
     } else {
       await disableLocalAuth();
     }
+  };
+
+  const handleCopyUid = async () => {
+    if (!user?.uid) return;
+    await Clipboard.setStringAsync(user.uid);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
   return (
@@ -71,6 +80,22 @@ export default function ProfileScreen() {
             Email
           </Text>
           <Text className="text-base text-ink-900 font-sans mt-1">{user?.email ?? '—'}</Text>
+        </View>
+
+        <View className="mt-4">
+          <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
+            App ID
+          </Text>
+          <View className="mt-2 flex-row items-center justify-between rounded-2xl border border-stroke-100 bg-white px-4 py-3">
+            <Text className="text-xs text-ink-900 font-sans" numberOfLines={1}>
+              {user?.uid ?? '—'}
+            </Text>
+            <Pressable onPress={handleCopyUid} disabled={!user?.uid}>
+              <Text className="text-xs font-sans-semibold text-primary-600">
+                {copied ? 'Copied' : 'Copy'}
+              </Text>
+            </Pressable>
+          </View>
         </View>
         </View>
 
