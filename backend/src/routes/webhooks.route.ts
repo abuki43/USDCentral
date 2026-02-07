@@ -59,6 +59,11 @@ router.post(
       }
 
       const payload = JSON.parse(raw.toString("utf-8")) as any;
+      console.info("[webhook] notification", {
+        notificationType: payload?.notificationType ?? null,
+        notificationId: payload?.notificationId ?? null,
+        notificationTxId: payload?.notification?.id ?? null,
+      });
       if (!payload?.notificationType?.startsWith("transactions.")) {
         return res.status(200).json({ ok: true });
       }
@@ -74,6 +79,15 @@ router.post(
       if (!tx) {
         return res.status(200).json({ ok: true });
       }
+
+      console.info("[webhook] transaction", {
+        txId: tx.id ?? null,
+        transactionType: tx.transactionType ?? null,
+        state: tx.state ?? null,
+        txHash: tx.txHash ?? null,
+        blockchain: tx.blockchain ?? null,
+        walletId: tx.walletId ?? null,
+      });
 
       if (
         tx.transactionType !== "INBOUND" &&
