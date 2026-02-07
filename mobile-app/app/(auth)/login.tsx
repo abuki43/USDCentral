@@ -1,47 +1,63 @@
-import { Link, Redirect } from 'expo-router';
-import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
-
-import AuthTextInput from '@/components/AuthTextInput';
-import PrimaryButton from '@/components/PrimaryButton';
+import { useState, useMemo } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, Text, View, StyleSheet, ScrollView } from 'react-native';
+import { Link } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/store/authStore';
+import Input from '@/components/ui/Input';
+import Button from '@/components/ui/Button';
 
 export default function LoginScreen() {
   const { login, isSubmitting, errorMessage, clearError, user, initializing } =
     useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   if (initializing) {
     return null;
   }
 
   if (user) {
-    return <Redirect href="/(tabs)" />;
+    return null;
   }
 
   const disabled = isSubmitting || !email.trim() || !password;
 
+  const emailIcon = useMemo(() => (
+    <Ionicons name="mail-outline" size={20} color="#94A3B8" />
+  ), []);
+
+  const passwordIcon = useMemo(() => (
+    <Pressable onPress={() => setShowPassword(!showPassword)}>
+      <Ionicons
+        name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+        size={20}
+        color="#94A3B8"
+      />
+    </Pressable>
+  ), [showPassword]);
+
   return (
     <KeyboardAvoidingView
-      className="flex-1 bg-surface-0 px-6"
+      style={styles.container}
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
-      <View className="flex-1 justify-center">
-        <View className="mb-6">
-          <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
-            USDCentral
-          </Text>
-          <Text className="text-3xl text-ink-900 font-sans-bold mt-2">
-            Welcome back
-          </Text>
-          <Text className="text-base text-ink-500 font-sans mt-2">
-            Sign in to continue building your unified USDC balance.
-          </Text>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <View style={styles.logoContainer}>
+            <View style={styles.logo}>
+              <Text style={styles.logoText}>$</Text>
+            </View>
+          </View>
+          <Text style={styles.title}>Welcome back</Text>
+          <Text style={styles.subtitle}>Sign in to continue to USDCentral</Text>
         </View>
 
-        <View className="bg-surface-1 border border-stroke-100 rounded-3xl p-5">
-          <AuthTextInput
+        <View style={styles.form}>
+          <Input
             label="Email"
             value={email}
             onChangeText={(value) => {
@@ -51,37 +67,172 @@ export default function LoginScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
+            placeholder="Enter your email"
+            icon={emailIcon}
           />
-          <AuthTextInput
+
+          <Input
             label="Password"
             value={password}
             onChangeText={(value) => {
               if (errorMessage) clearError();
               setPassword(value);
             }}
-            secureTextEntry
+            secureTextEntry={!showPassword}
+            placeholder="Enter your password"
+            icon={passwordIcon}
           />
 
           {errorMessage ? (
-            <Text className="text-danger-500 font-sans mb-4">{errorMessage}</Text>
+            <View style={styles.errorContainer}>
+              <Ionicons name="alert-circle" size={18} color="#EF4444" />
+              <Text style={styles.errorText}>{errorMessage}</Text>
+            </View>
           ) : null}
 
-          <PrimaryButton
-            label={isSubmitting ? 'Signing in...' : 'Sign in'}
+          <Pressable style={styles.forgotPassword}>
+            <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+          </Pressable>
+
+          <Button
+            label={isSubmitting ? 'Signing in...' : 'Sign In'}
             onPress={() => login(email, password)}
             disabled={disabled}
+            loading={isSubmitting}
           />
 
-          <View className="flex-row items-center justify-center mt-5">
-            <Text className="text-ink-500 font-sans">New here? </Text>
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or continue with</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <Button
+            label="Continue with Google"
+            variant="secondary"
+            onPress={() => {}}
+            icon={<Ionicons name="logo-google" size={20} color="#0F172A" />}
+          />
+
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>New here?</Text>
             <Link href="/(auth)/register" asChild>
               <Pressable>
-                <Text className="text-primary-600 font-sans-semibold">Create an account</Text>
+                <Text style={styles.footerLink}>Create an account</Text>
               </Pressable>
             </Link>
           </View>
         </View>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 80,
+    paddingBottom: 40,
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  logoContainer: {
+    marginBottom: 24,
+  },
+  logo: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    backgroundColor: '#6366F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+  },
+  logoText: {
+    fontSize: 36,
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
+  },
+  title: {
+    fontSize: 28,
+    fontFamily: 'Inter_700Bold',
+    color: '#0F172A',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+  },
+  form: {
+    gap: 20,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#EF4444',
+  },
+  forgotPassword: {
+    alignSelf: 'flex-end',
+    marginTop: 4,
+  },
+  forgotPasswordText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#6366F1',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 8,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  dividerText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#94A3B8',
+    marginHorizontal: 16,
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  footerText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+  },
+  footerLink: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#6366F1',
+    marginLeft: 4,
+  },
+});

@@ -17,10 +17,12 @@ type LocalAuthState = {
   biometricsSupported: boolean;
   biometricsEnabled: boolean;
   pinSet: boolean;
+  pinVerifiedThisSession: boolean;
   errorMessage: string | null;
   initialize: () => Promise<void>;
   enableLocalAuth: () => Promise<boolean>;
   disableLocalAuth: () => Promise<void>;
+  clearLocalAuth: () => Promise<void>;
   setPin: (pin: string) => Promise<boolean>;
   unlockWithPin: (pin: string) => Promise<boolean>;
   unlockWithBiometrics: () => Promise<boolean>;
@@ -36,33 +38,48 @@ export const useLocalAuthStore = create<LocalAuthState>((set, get) => ({
   biometricsSupported: false,
   biometricsEnabled: false,
   pinSet: false,
+  pinVerifiedThisSession: false,
   errorMessage: null,
   initialize: async () => {
-    const [enabledValue, pinHash, biometricsValue, hasHardware] = await Promise.all([
-      SecureStore.getItemAsync(LOCAL_AUTH_ENABLED_KEY),
-      SecureStore.getItemAsync(LOCAL_AUTH_PIN_HASH_KEY),
-      SecureStore.getItemAsync(LOCAL_AUTH_BIOMETRICS_KEY),
-      LocalAuthentication.hasHardwareAsync(),
-    ]);
+    try {
+      const [enabledValue, pinHash, biometricsValue, hasHardware] = await Promise.all([
+        SecureStore.getItemAsync(LOCAL_AUTH_ENABLED_KEY).catch(() => null),
+        SecureStore.getItemAsync(LOCAL_AUTH_PIN_HASH_KEY).catch(() => null),
+        SecureStore.getItemAsync(LOCAL_AUTH_BIOMETRICS_KEY).catch(() => null),
+        LocalAuthentication.hasHardwareAsync().catch(() => false),
+      ]);
 
-    const supportedTypes = hasHardware
-      ? await LocalAuthentication.supportedAuthenticationTypesAsync()
-      : [];
+      const supportedTypes = hasHardware
+        ? await LocalAuthentication.supportedAuthenticationTypesAsync().catch(() => [])
+        : [];
 
-    const biometricsSupported = supportedTypes.length > 0;
+      const biometricsSupported = supportedTypes.length > 0;
 
-    const isEnabled = enabledValue === 'true';
-    const biometricsEnabled = biometricsValue === 'true' && biometricsSupported;
-    const pinSet = Boolean(pinHash);
+      const isEnabled = enabledValue === 'true';
+      const biometricsEnabled = biometricsValue === 'true' && biometricsSupported;
+      const pinSet = Boolean(pinHash);
 
-    set({
-      isInitialized: true,
-      isEnabled,
-      biometricsSupported,
-      biometricsEnabled,
-      pinSet,
-      isLocked: isEnabled,
-    });
+      set({
+        isInitialized: true,
+        isEnabled,
+        biometricsSupported,
+        biometricsEnabled,
+        pinSet,
+        pinVerifiedThisSession: false,
+        isLocked: isEnabled,
+      });
+    } catch (e) {
+      console.log('Local auth initialization failed, continuing without PIN:', e);
+      set({
+        isInitialized: true,
+        isEnabled: false,
+        biometricsSupported: false,
+        biometricsEnabled: false,
+        pinSet: false,
+        pinVerifiedThisSession: false,
+        isLocked: false,
+      });
+    }
   },
   enableLocalAuth: async () => {
     const { pinSet } = get();
@@ -71,19 +88,46 @@ export const useLocalAuthStore = create<LocalAuthState>((set, get) => ({
       return false;
     }
 
-    await SecureStore.setItemAsync(LOCAL_AUTH_ENABLED_KEY, 'true');
+    try {
+      await SecureStore.setItemAsync(LOCAL_AUTH_ENABLED_KEY, 'true');
+    } catch (e) {
+      console.log('Failed to save local auth enabled state:', e);
+    }
     set({ isEnabled: true, isLocked: true });
     return true;
   },
   disableLocalAuth: async () => {
-    await Promise.all([
-      SecureStore.setItemAsync(LOCAL_AUTH_ENABLED_KEY, 'false'),
-      SecureStore.setItemAsync(LOCAL_AUTH_BIOMETRICS_KEY, 'false'),
-    ]);
+    try {
+      await Promise.all([
+        SecureStore.setItemAsync(LOCAL_AUTH_ENABLED_KEY, 'false'),
+        SecureStore.setItemAsync(LOCAL_AUTH_BIOMETRICS_KEY, 'false'),
+      ]);
+    } catch (e) {
+      console.log('Failed to save local auth disabled state:', e);
+    }
     set({
       isEnabled: false,
       biometricsEnabled: false,
       isLocked: false,
+    });
+  },
+  clearLocalAuth: async () => {
+    try {
+      await Promise.all([
+        SecureStore.deleteItemAsync(LOCAL_AUTH_ENABLED_KEY),
+        SecureStore.deleteItemAsync(LOCAL_AUTH_PIN_HASH_KEY),
+        SecureStore.deleteItemAsync(LOCAL_AUTH_BIOMETRICS_KEY),
+      ]);
+    } catch (e) {
+      console.log('Failed to clear local auth data:', e);
+    }
+    set({
+      isEnabled: false,
+      isLocked: false,
+      biometricsEnabled: false,
+      pinSet: false,
+      pinVerifiedThisSession: false,
+      errorMessage: null,
     });
   },
   setPin: async (pin: string) => {
@@ -92,12 +136,23 @@ export const useLocalAuthStore = create<LocalAuthState>((set, get) => ({
       return false;
     }
     const hashed = await hashPin(pin);
-    await SecureStore.setItemAsync(LOCAL_AUTH_PIN_HASH_KEY, hashed);
+    try {
+      await SecureStore.setItemAsync(LOCAL_AUTH_PIN_HASH_KEY, hashed);
+    } catch (e) {
+      console.log('Failed to save PIN hash:', e);
+      set({ errorMessage: 'Failed to save PIN. Please try again.' });
+      return false;
+    }
     set({ pinSet: true });
     return true;
   },
   unlockWithPin: async (pin: string) => {
-    const storedHash = await SecureStore.getItemAsync(LOCAL_AUTH_PIN_HASH_KEY);
+    let storedHash: string | null = null;
+    try {
+      storedHash = await SecureStore.getItemAsync(LOCAL_AUTH_PIN_HASH_KEY);
+    } catch (e) {
+      console.log('Failed to read PIN hash:', e);
+    }
     if (!storedHash) {
       set({ errorMessage: 'No PIN is set yet.' });
       return false;
@@ -109,7 +164,7 @@ export const useLocalAuthStore = create<LocalAuthState>((set, get) => ({
       return false;
     }
 
-    set({ isLocked: false, errorMessage: null });
+    set({ isLocked: false, errorMessage: null, pinVerifiedThisSession: true });
     return true;
   },
   unlockWithBiometrics: async () => {
@@ -129,7 +184,7 @@ export const useLocalAuthStore = create<LocalAuthState>((set, get) => ({
       return false;
     }
 
-    set({ isLocked: false, errorMessage: null });
+    set({ isLocked: false, errorMessage: null, pinVerifiedThisSession: true });
     return true;
   },
   setBiometricsEnabled: async (enabled: boolean) => {
@@ -138,7 +193,11 @@ export const useLocalAuthStore = create<LocalAuthState>((set, get) => ({
       set({ errorMessage: 'Biometrics are not supported on this device.' });
       return;
     }
-    await SecureStore.setItemAsync(LOCAL_AUTH_BIOMETRICS_KEY, enabled ? 'true' : 'false');
+    try {
+      await SecureStore.setItemAsync(LOCAL_AUTH_BIOMETRICS_KEY, enabled ? 'true' : 'false');
+    } catch (e) {
+      console.log('Failed to save biometrics state:', e);
+    }
     set({ biometricsEnabled: enabled });
   },
   lock: () => set({ isLocked: true }),

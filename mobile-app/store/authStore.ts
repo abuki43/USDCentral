@@ -11,6 +11,7 @@ import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 
 import { backendFetch } from '@/lib/backend';
 import { firebaseAuth, firestore } from '@/lib/firebase';
+import { useLocalAuthStore } from '@/store/localAuthStore';
 
 type AuthState = {
   user: User | null;
@@ -139,7 +140,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: async () => {
     set({ isSubmitting: true, errorMessage: null });
     try {
+      await useLocalAuthStore.getState().clearLocalAuth();
       await signOut(firebaseAuth);
+      set({ user: null });
     } catch (error) {
       set({ errorMessage: formatFirebaseError(error) });
     } finally {

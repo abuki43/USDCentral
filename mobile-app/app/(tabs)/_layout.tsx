@@ -1,58 +1,39 @@
-import React from 'react';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Redirect, Tabs } from 'expo-router';
-
-import Colors from '@/constants/Colors';
+import { View, StyleSheet } from 'react-native';
+import { useRouter, usePathname, Slot } from 'expo-router';
 import { useAuthStore } from '@/store/authStore';
-
-// You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
-function TabBarIcon(props: {
-  name: React.ComponentProps<typeof FontAwesome>['name'];
-  color: string;
-}) {
-  return <FontAwesome size={22} {...props} />;
-}
+import FloatingDock from '@/components/ui/FloatingDock';
+import { useEffect } from 'react';
 
 export default function TabLayout() {
   const { user, initializing } = useAuthStore();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (!initializing && user && pathname === '/(tabs)') {
+      router.replace('/(tabs)/index' as any);
+    }
+  }, [initializing, user, pathname]);
 
   if (initializing) {
     return null;
   }
 
   if (!user) {
-    return <Redirect href="/(auth)/login" />;
+    return null;
   }
 
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors.light.tabIconSelected,
-        tabBarInactiveTintColor: Colors.light.tabIconDefault,
-        headerShown: true,
-        headerTitleAlign: 'center',
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <TabBarIcon name="home" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="two"
-        options={{
-          title: 'Deposit',
-          tabBarIcon: ({ color }) => <TabBarIcon name="money" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profile',
-          tabBarIcon: ({ color }) => <TabBarIcon name="user" color={color} />,
-        }}
-      />
-    </Tabs>
+    <View style={styles.container}>
+      <Slot />
+      <FloatingDock />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+});

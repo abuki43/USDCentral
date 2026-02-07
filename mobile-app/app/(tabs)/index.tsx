@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, Text, View, StyleSheet, SafeAreaView, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, orderBy, query, Timestamp } from 'firebase/firestore';
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 
-import { backendFetch } from '@/lib/backend';
 import { firestore } from '@/lib/firebase';
 import { useAuthStore } from '@/store/authStore';
+import BalanceCard from '@/components/ui/BalanceCard';
+import ActionButtons from '@/components/ui/ActionButtons';
+import AlertCard from '@/components/ui/AlertCard';
+import TransactionItem from '@/components/ui/TransactionItem';
 
 type UnifiedBalanceDoc = {
   usdc?: { amount?: string };
@@ -18,38 +23,105 @@ type InboundAlertDoc = {
   symbol?: string;
 };
 
-type CircleTransaction = {
-  id: string;
-  blockchain: string;
-  state: string;
-  createDate: string;
-  updateDate?: string;
-  txHash?: string;
-  transactionType?: 'INBOUND' | 'OUTBOUND';
-  txType?: 'INBOUND' | 'OUTBOUND';
-  amounts?: string[];
-  sourceAddress?: string;
-  destinationAddress?: string;
+type InboundTokenAlert = {
+  txId: string;
+  amount?: string;
+  symbol?: string | null;
+  blockchain?: string | null;
 };
+
+type FinalizedTokenAlert = {
+  originTxId: string;
+  amount?: string;
+  symbol?: string | null;
+  destinationChain?: string | null;
+  sourceChain?: string | null;
+};
+
+type UnifiedTransaction = {
+  id: string;
+  kind: 'DEPOSIT' | 'WITHDRAW' | 'SEND' | 'RECEIVE' | 'SWAP' | 'BRIDGE' | 'EARN';
+  status: 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'FAILED' | 'BRIDGING';
+  amount?: string;
+  symbol?: string | null;
+  blockchain?: string | null;
+  sourceChain?: string | null;
+  destinationChain?: string | null;
+  txHash?: string | null;
+  relatedTxId?: string | null;
+  metadata?: Record<string, any> | null;
+  createdAt?: Timestamp | string | null;
+  updatedAt?: Timestamp | string | null;
+};
+
+const BASE_CHAIN = 'BASE-SEPOLIA';
 
 export default function TabOneScreen() {
   const { user } = useAuthStore();
   const router = useRouter();
-  const [balance, setBalance] = useState<string>('—');
+  const [balance, setBalance] = useState<string>('0.00');
   const [alert, setAlert] = useState<InboundAlertDoc | null>(null);
-  const [transactions, setTransactions] = useState<CircleTransaction[]>([]);
+  const [incomingAlert, setIncomingAlert] = useState<InboundTokenAlert | null>(null);
+  const [finalizedAlert, setFinalizedAlert] = useState<FinalizedTokenAlert | null>(null);
+  const [transactions, setTransactions] = useState<UnifiedTransaction[]>([]);
   const [isLoadingTx, setIsLoadingTx] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
+  const lastIncomingTxIdRef = useRef<string | null>(null);
+  const lastFinalizedOriginRef = useRef<string | null>(null);
+
+  const sortedTransactions = useMemo(() => {
+    const toMillis = (value?: Timestamp | string | null) => {
+      if (value instanceof Timestamp) return value.toMillis();
+      if (typeof value === 'string') return new Date(value).getTime();
+      return 0;
+    };
+
+    const isFinalBaseDeposit = (tx: UnifiedTransaction) => {
+      if (tx.kind !== 'DEPOSIT') return true;
+      const blockchain = tx.blockchain ?? null;
+      const source = tx.sourceChain ?? null;
+      if (source && source !== BASE_CHAIN) return false;
+      return blockchain === BASE_CHAIN;
+    };
+
+    const earnActions = new Set(['ADD_LIQUIDITY', 'WITHDRAW_LIQUIDITY', 'COLLECT_FEES']);
+    const withdrawPositionIds = new Set(
+      transactions
+        .filter((tx) => tx.kind === 'EARN' && tx.metadata?.action === 'WITHDRAW_LIQUIDITY')
+        .map((tx) => tx.metadata?.positionId)
+        .filter((id): id is string => Boolean(id)),
+    );
+
+    const isVisibleEarn = (tx: UnifiedTransaction) => {
+      if (tx.kind !== 'EARN') return true;
+      const action = tx.metadata?.action as string | undefined;
+      if (!action || !earnActions.has(action)) return false;
+      if (action === 'COLLECT_FEES') {
+        const positionId = tx.metadata?.positionId as string | undefined;
+        if (positionId && withdrawPositionIds.has(positionId)) return false;
+      }
+      return true;
+    };
+
+    return [...transactions]
+      .filter((tx) => tx.kind !== 'BRIDGE')
+      .filter(isFinalBaseDeposit)
+      .filter(isVisibleEarn)
+      .sort((a, b) => {
+        const aTime = toMillis(a.updatedAt ?? a.createdAt);
+        const bTime = toMillis(b.updatedAt ?? b.createdAt);
+        return bTime - aTime;
+      });
+  }, [transactions]);
 
   useEffect(() => {
     if (!user) return;
 
     const balanceRef = doc(firestore, 'users', user.uid, 'balances', 'unified');
     const alertRef = doc(firestore, 'users', user.uid, 'alerts', 'inboundUSDC');
-
     const unsubBalance = onSnapshot(balanceRef, (snap) => {
       const data = (snap.data() as UnifiedBalanceDoc | undefined) ?? undefined;
-      setBalance(data?.usdc?.amount ?? '0');
+      setBalance(data?.usdc?.amount ?? '0.00');
     });
 
     const unsubAlert = onSnapshot(alertRef, (snap) => {
@@ -63,120 +135,269 @@ export default function TabOneScreen() {
   }, [user]);
 
   useEffect(() => {
+    if (!incomingAlert?.txId) return;
+    if (incomingAlert.txId === lastIncomingTxIdRef.current) return;
+    
+    lastIncomingTxIdRef.current = incomingAlert.txId;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, [incomingAlert?.txId]);
+
+  useEffect(() => {
+    if (!finalizedAlert?.originTxId) return;
+    if (finalizedAlert.originTxId === lastFinalizedOriginRef.current) return;
+    
+    lastFinalizedOriginRef.current = finalizedAlert.originTxId;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, [finalizedAlert?.originTxId]);
+
+  useEffect(() => {
     if (!user) return;
-    let cancelled = false;
 
     setIsLoadingTx(true);
     setTxError(null);
-    backendFetch('/circle/transactions?pageSize=20&order=DESC')
-      .then((data: { transactions?: CircleTransaction[] }) => {
-        if (cancelled) return;
-        setTransactions(data.transactions ?? []);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setTxError(e instanceof Error ? e.message : 'Failed to load transactions');
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setIsLoadingTx(false);
-      });
 
-    return () => {
-      cancelled = true;
-    };
+    const txRef = collection(firestore, 'users', user.uid, 'transactions');
+    const txQuery = query(txRef, orderBy('updatedAt', 'desc'), limit(20));
+
+    const unsubscribe = onSnapshot(
+      txQuery,
+      (snap) => {
+        const items = snap.docs.map((doc) => {
+          const data = doc.data() as UnifiedTransaction;
+          return { ...data, id: doc.id };
+        });
+        setTransactions(items);
+        setIsLoadingTx(false);
+      },
+      (error) => {
+        setTxError(error?.message ?? 'Failed to load transactions');
+        setIsLoadingTx(false);
+      },
+    );
+
+    return () => unsubscribe();
   }, [user]);
 
-  return (
-    <ScrollView className="flex-1 bg-surface-0">
-      <View className="px-6 pt-6 pb-10">
-        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
-          Total USDC
-        </Text>
-        <Text className="text-4xl text-ink-900 font-sans-bold mt-2">{balance}</Text>
+  const stats: { label: string; value: string; icon: any; color: string }[] = [
+    { label: 'APY', value: '5.2%', icon: 'trending-up', color: '#10B981' },
+    { label: 'Pool TVL', value: '$2.4M', icon: 'wallet', color: '#6366F1' },
+    { label: 'Your Earned', value: '$12.34', icon: 'gift', color: '#F59E0B' },
+  ];
 
-        <View className="mt-5 flex-row gap-3">
-          <Pressable
-            className="flex-1 items-center justify-center rounded-2xl bg-primary-600 py-3 active:opacity-90"
-            onPress={() => router.push('/withdraw')}
-          >
-            <Text className="text-sm font-sans-semibold text-white">Withdraw</Text>
-          </Pressable>
-          <Pressable
-            className="flex-1 items-center justify-center rounded-2xl border border-stroke-100 bg-surface-1 py-3 active:opacity-90"
-            onPress={() => router.push('/send')}
-          >
-            <Text className="text-sm font-sans-semibold text-ink-700">Send</Text>
-          </Pressable>
-          <View className="flex-1 items-center justify-center rounded-2xl border border-stroke-100 bg-surface-1 py-3">
-            <Text className="text-sm font-sans-semibold text-ink-700">Deposit</Text>
+  const recentTransactions = sortedTransactions.slice(0, 5);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={styles.userGreeting}>
+            <Text style={styles.greeting}>Good evening</Text>
+            <Text style={styles.userName}>{user?.displayName?.split(' ')[0] || 'User'}</Text>
           </View>
         </View>
 
-        {alert?.state === 'CONFIRMED' ? (
-          <View className="mt-5 bg-primary-50 border border-primary-100 rounded-3xl p-4">
-            <Text className="text-ink-900 font-sans-semibold">Incoming deposit</Text>
-            <Text className="text-ink-700 font-sans mt-1">
-              {alert.amount ?? '—'} {alert.symbol ?? 'USDC'} on {alert.blockchain ?? 'network'} confirmed.
-              {' '}Finalizing…
-            </Text>
-          </View>
-        ) : null}
-      </View>
+        {/* Balance Card */}
+        <BalanceCard 
+          balance={balance}
+          symbol="USDC"
+        />
 
-      <View className="mt-6 bg-surface-1 border border-stroke-100 rounded-3xl p-5">
-        <Text className="text-xs text-ink-500 font-sans-medium tracking-widest uppercase">
-          Recent activity
-        </Text>
+        {/* Action Buttons */}
+        <ActionButtons />
 
-        {isLoadingTx ? (
-          <View className="flex-row items-center mt-4">
-            <ActivityIndicator />
-            <Text className="ml-3 text-ink-500 font-sans">Loading…</Text>
-          </View>
-        ) : txError ? (
-          <Text className="mt-4 text-danger-500 font-sans">{txError}</Text>
-        ) : transactions.length === 0 ? (
-          <Text className="mt-4 text-ink-500 font-sans">No transactions yet.</Text>
-        ) : (
-          <View className="mt-4">
-            {transactions.slice(0, 10).map((tx, index) => {
-              const txType = tx.transactionType ?? tx.txType;
-              const direction = txType === 'INBOUND' ? 'Received' : 'Sent';
-              const sign = txType === 'INBOUND' ? '+' : '-';
-              const amount = tx.amounts?.[0];
-              const when = tx.createDate ? new Date(tx.createDate).toLocaleString() : '';
 
-              return (
-                <View
-                  key={tx.id}
-                  className={index === 0 ? 'pt-0' : 'pt-4 border-t border-stroke-100'}
-                >
-                  <View className="flex-row items-start justify-between">
-                    <View className="flex-1 pr-4">
-                      <Text className="text-base text-ink-900 font-sans-semibold">
-                        {direction}
-                      </Text>
-                      <Text className="text-xs text-ink-500 font-sans mt-1">
-                        {tx.blockchain} • {tx.state}
-                      </Text>
-                      {when ? (
-                        <Text className="text-xs text-ink-500 font-sans mt-1">{when}</Text>
-                      ) : null}
-                    </View>
-
-                    <View>
-                      <Text className="text-base text-ink-900 font-sans-semibold">
-                        {amount ? `${sign}${amount}` : '—'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              );
-            })}
+        {/* Alerts */}
+        {(alert || incomingAlert || finalizedAlert) && (
+          <View style={styles.section}>
+            {alert?.state === 'CONFIRMED' && (
+              <AlertCard
+                type="info"
+                title="Incoming deposit"
+                message={`${alert.amount ?? '—'} ${alert.symbol ?? 'USDC'} on ${alert.blockchain ?? 'network'} confirmed. Finalizing…`}
+                autoDismiss
+                duration={6000}
+              />
+            )}
+            {incomingAlert?.txId && (
+              <AlertCard
+                type="success"
+                title="Token received"
+                message={`${incomingAlert.amount ?? '—'} ${incomingAlert.symbol ?? 'token'} on ${incomingAlert.blockchain ?? 'network'} detected.`}
+                autoDismiss
+                duration={6000}
+              />
+            )}
+            {finalizedAlert?.originTxId && (
+              <AlertCard
+                type="success"
+                title="Funds finalized"
+                message={`${finalizedAlert.amount ?? '—'} ${finalizedAlert.symbol ?? 'USDC'} finalized on ${finalizedAlert.destinationChain ?? finalizedAlert.sourceChain ?? 'network'}.`}
+                autoDismiss
+                duration={8000}
+              />
+            )}
           </View>
         )}
-      </View>
-    </ScrollView>
+
+        {/* Recent Activity */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Recent Activity</Text>
+          </View>
+
+          {isLoadingTx ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator color="#6366F1" />
+              <Text style={styles.loadingText}>Loading transactions…</Text>
+            </View>
+          ) : txError ? (
+            <View style={styles.errorContainer}>
+              <Ionicons name="alert-circle" size={24} color="#EF4444" />
+              <Text style={styles.errorText}>{txError}</Text>
+            </View>
+          ) : recentTransactions.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="receipt-outline" size={32} color="#94A3B8" />
+              </View>
+              <Text style={styles.emptyTitle}>No transactions yet</Text>
+              <Text style={styles.emptySubtitle}>Your recent activity will appear here</Text>
+            </View>
+          ) : (
+            <View style={styles.transactionsList}>
+              {recentTransactions.map((tx) => (
+                <TransactionItem
+                  key={tx.id}
+                  id={tx.id}
+                  type={tx.kind}
+                  amount={tx.amount ?? '0'}
+                  symbol={tx.symbol ?? 'USDC'}
+                  status={tx.status}
+                  timestamp={
+                    tx.createdAt instanceof Timestamp
+                      ? tx.createdAt.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                      : typeof tx.createdAt === 'string'
+                        ? new Date(tx.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                        : '—'
+                  }
+                />
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Bottom padding for floating dock */}
+        <View style={styles.bottomPadding} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    width: '100%',
+  },
+  scrollView: {
+    flex: 1,
+    width: '100%',
+  },
+  scrollContent: {
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+  },
+  userGreeting: {
+    flex: 1,
+  },
+  greeting: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#64748B',
+    marginBottom: 2,
+  },
+  userName: {
+    fontSize: 24,
+    fontFamily: 'Inter_700Bold',
+    color: '#0F172A',
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#0F172A',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+    marginTop: 12,
+  },
+  errorContainer: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  errorText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#EF4444',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 48,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+  },
+  emptyIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontFamily: 'Inter_600Semibold',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#64748B',
+  },
+  transactionsList: {
+    gap: 8,
+  },
+  bottomPadding: {
+    height: 120,
+  },
+});

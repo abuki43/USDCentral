@@ -3,8 +3,8 @@ import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { AppState } from 'react-native';
-import { useEffect, useRef } from 'react';
+import { AppState, View, StyleSheet } from 'react-native';
+import { useEffect, useState, useRef } from 'react';
 import 'react-native-reanimated';
 
 import '../global.css';
@@ -19,27 +19,21 @@ import {
 
 import { useAuthStore } from '@/store/authStore';
 import { useLocalAuthStore } from '@/store/localAuthStore';
+import LockScreen from './lock';
 
 
 export {
-  // Catch any errors thrown by the Layout component.
   ErrorBoundary,
 } from 'expo-router';
 
 export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
   initialRouteName: 'index',
 };
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  const initializeAuth = useAuthStore((state) => state.initialize);
-  const initializeLocalAuth = useLocalAuthStore((state) => state.initialize);
-  const lockLocalAuth = useLocalAuthStore((state) => state.lock);
-  const localAuthEnabled = useLocalAuthStore((state) => state.isEnabled);
-  const [loaded, error] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
     Inter_400Regular,
     Inter_500Medium,
@@ -48,87 +42,90 @@ export default function RootLayout() {
     ...FontAwesome.font,
   });
 
-  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
   useEffect(() => {
-    if (error) throw error;
-  }, [error]);
+    if (fontError) throw fontError;
+  }, [fontError]);
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
+  return <RootLayoutNav onReady={() => SplashScreen.hideAsync()} />;
+}
+
+function RootLayoutNav({ onReady }: { onReady: () => void }) {
+  const { user, initializing, initialize: initAuth } = useAuthStore();
+  const {
+    isInitialized: localAuthInitialized,
+    isEnabled: localAuthEnabled,
+    isLocked,
+    initialize: initLocalAuth,
+    lock: doLock,
+  } = useLocalAuthStore();
+
+  const [localAuthError, setLocalAuthError] = useState(false);
 
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
+    // Start initializations
+    try {
+        initAuth();
+    } catch (e) {
+        console.log('Firebase auth init failed:', e);
     }
-  }, [loaded]);
+
+    initLocalAuth().catch((e) => {
+      console.log('Local auth init failed, continuing without PIN:', e);
+      setLocalAuthError(true);
+    });
+  }, []);
 
   useEffect(() => {
-    initializeAuth();
-  }, [initializeAuth]);
+    // Wait for both auth systems to settle before hiding splash
+    const isAuthReady = !initializing;
+    const isLocalAuthReady = localAuthInitialized || localAuthError;
+
+    if (isAuthReady && isLocalAuthReady) {
+      onReady();
+    }
+  }, [initializing, localAuthInitialized, localAuthError, onReady]);
 
   useEffect(() => {
-    initializeLocalAuth();
-  }, [initializeLocalAuth]);
-
-  useEffect(() => {
+    // Monitor AppState to lock immediately when backgrounded
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state !== 'active' && localAuthEnabled) {
-        lockLocalAuth();
+      if (state.match(/inactive|background/) && localAuthEnabled && !localAuthError) {
+        doLock();
       }
     });
 
     return () => subscription.remove();
-  }, [localAuthEnabled, lockLocalAuth]);
+  }, [localAuthEnabled, localAuthError, doLock]);
 
-  if (!loaded) {
-    return null;
-  }
-
-  return <RootLayoutNav />;
-}
-
-function RootLayoutNav() {
-  const { user, initializing } = useAuthStore();
-  const { isEnabled, isLocked, isInitialized } = useLocalAuthStore();
-  const router = useRouter();
-  const pathname = usePathname();
-  const lastNavKeyRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (initializing || !isInitialized) {
-      return;
-    }
-
-    const shouldLock = Boolean(user && isEnabled && isLocked);
-    const navKey = `${shouldLock}:${pathname}`;
-
-    if (lastNavKeyRef.current === navKey) return;
-
-    if (shouldLock) {
-      if (pathname !== '/lock') {
-        lastNavKeyRef.current = navKey;
-        router.replace('/lock');
-      }
-      return;
-    }
-
-    // If we got unlocked while on the lock screen, return to the app.
-    if (pathname === '/lock') {
-      lastNavKeyRef.current = navKey;
-      router.replace('/(tabs)');
-    }
-  }, [user, isEnabled, isLocked, pathname, router]);
-
-  if (initializing || !isInitialized) {
-    return null;
-  }
+  const showLockOverlay = user && localAuthEnabled && isLocked && !localAuthError;
 
   return (
-    <ThemeProvider value={DefaultTheme}>
-      <StatusBar style="dark" />
-      <Stack>
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="lock" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+    <View style={styles.container}>
+      <ThemeProvider value={DefaultTheme}>
+        <StatusBar style="dark" />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(auth)" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="lock" />
+          <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+        </Stack>
+
+        {showLockOverlay && (
+          <View style={StyleSheet.absoluteFill}>
+            <LockScreen isOverlay />
+          </View>
+        )}
+      </ThemeProvider>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+});

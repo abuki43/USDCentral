@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -12,9 +12,13 @@ type ResolvedRecipient = {
   email: string | null;
 };
 
+type RecipientMode = 'appId' | 'email';
+
 export default function SendScreen() {
   const router = useRouter();
   const [recipientUid, setRecipientUid] = useState('');
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [recipientMode, setRecipientMode] = useState<RecipientMode>('appId');
   const [amount, setAmount] = useState('');
   const [resolved, setResolved] = useState<ResolvedRecipient | null>(null);
   const [isResolving, setIsResolving] = useState(false);
@@ -23,17 +27,25 @@ export default function SendScreen() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const canSend = useMemo(() => {
-    return recipientUid.trim().length > 0 && Number(amount) > 0;
-  }, [recipientUid, amount]);
+    const recipientValue =
+      recipientMode === 'email' ? recipientEmail.trim() : recipientUid.trim();
+    return recipientValue.length > 0 && Number(amount) > 0 && Boolean(resolved?.uid);
+  }, [recipientEmail, recipientMode, recipientUid, amount, resolved?.uid]);
 
   const resolveRecipient = async () => {
     const uid = recipientUid.trim();
-    if (!uid) return;
+    const email = recipientEmail.trim();
+    const lookupValue = recipientMode === 'email' ? email : uid;
+    if (!lookupValue) return;
     setIsResolving(true);
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const data = await backendFetch(`/transfer/resolve?uid=${encodeURIComponent(uid)}`);
+      const data = await backendFetch(
+        recipientMode === 'email'
+          ? `/transfer/resolve-email?email=${encodeURIComponent(email)}`
+          : `/transfer/resolve?uid=${encodeURIComponent(uid)}`,
+      );
       setResolved(data as ResolvedRecipient);
     } catch (error) {
       setResolved(null);
@@ -45,22 +57,37 @@ export default function SendScreen() {
 
   const submitSend = async () => {
     const uid = recipientUid.trim();
-    if (!uid) return;
+    const email = recipientEmail.trim();
+    if (recipientMode === 'appId' && !uid) return;
+    if (recipientMode === 'email' && !email) return;
+    if (!resolved?.uid) return;
     setIsSending(true);
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
       await backendFetch('/transfer/send', {
         method: 'POST',
-        body: JSON.stringify({ recipientUid: uid, amount }),
+        body: JSON.stringify({ recipientUid: resolved.uid, amount }),
       });
-      setSuccessMessage('Transfer submitted. It may take a minute to confirm.');
+      setSuccessMessage('Transfer submitted. Returning to home…');
+      setRecipientUid('');
+      setRecipientEmail('');
+      setAmount('');
+      setResolved(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Transfer failed');
     } finally {
       setIsSending(false);
     }
   };
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = setTimeout(() => {
+      router.replace('/');
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [successMessage, router]);
 
   return (
     <ScrollView className="flex-1 bg-surface-0">
@@ -71,22 +98,69 @@ export default function SendScreen() {
 
         <Text className="text-2xl text-ink-900 font-sans-semibold">Send USDC</Text>
         <Text className="text-ink-600 font-sans mt-2">
-          Send USDC on Base Sepolia using a recipient UID.
+          Send USDC on Base Sepolia using an App ID or email.
         </Text>
 
         <View className="mt-6">
-          <AuthTextInput
-            label="Recipient UID"
-            value={recipientUid}
-            onChangeText={setRecipientUid}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <View className="mb-4 flex-row rounded-2xl border border-stroke-100 bg-surface-1 p-1">
+            <Pressable
+              className={
+                recipientMode === 'appId'
+                  ? 'flex-1 items-center justify-center rounded-2xl bg-surface-0 py-2'
+                  : 'flex-1 items-center justify-center rounded-2xl py-2'
+              }
+              onPress={() => {
+                setRecipientMode('appId');
+                setResolved(null);
+                setErrorMessage(null);
+              }}
+            >
+              <Text className="text-xs font-sans-semibold text-ink-800">App ID</Text>
+            </Pressable>
+            <Pressable
+              className={
+                recipientMode === 'email'
+                  ? 'flex-1 items-center justify-center rounded-2xl bg-surface-0 py-2'
+                  : 'flex-1 items-center justify-center rounded-2xl py-2'
+              }
+              onPress={() => {
+                setRecipientMode('email');
+                setResolved(null);
+                setErrorMessage(null);
+              }}
+            >
+              <Text className="text-xs font-sans-semibold text-ink-800">Email</Text>
+            </Pressable>
+          </View>
+
+          {recipientMode === 'appId' ? (
+            <AuthTextInput
+              label="Recipient App ID"
+              value={recipientUid}
+              onChangeText={setRecipientUid}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          ) : (
+            <AuthTextInput
+              label="Recipient Email"
+              value={recipientEmail}
+              onChangeText={setRecipientEmail}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+            />
+          )}
 
           <Pressable
             className="mb-6 items-center justify-center rounded-2xl border border-stroke-100 bg-surface-1 py-3"
             onPress={resolveRecipient}
-            disabled={isResolving || recipientUid.trim().length === 0}
+            disabled={
+              isResolving ||
+              (recipientMode === 'appId'
+                ? recipientUid.trim().length === 0
+                : recipientEmail.trim().length === 0)
+            }
           >
             {isResolving ? (
               <ActivityIndicator />
@@ -98,9 +172,15 @@ export default function SendScreen() {
           {resolved ? (
             <View className="mb-6 rounded-2xl border border-stroke-100 bg-surface-1 p-4">
               <Text className="text-sm text-ink-900 font-sans-semibold">Recipient found</Text>
-              <Text className="text-xs text-ink-600 font-sans mt-1">
-                {resolved.displayName ?? 'No name'} • {resolved.email ?? 'No email'}
-              </Text>
+              {recipientMode === 'email' ? (
+                <Text className="text-xs text-ink-600 font-sans mt-1">
+                  {resolved.displayName ?? 'No name'} • {resolved.email ?? 'No email'}
+                </Text>
+              ) : (
+                <Text className="text-xs text-ink-600 font-sans mt-1">
+                  App ID available for transfer.
+                </Text>
+              )}
             </View>
           ) : null}
 
