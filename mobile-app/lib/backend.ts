@@ -10,8 +10,10 @@ console.log('Backend URL:', backendUrl);
 export async function backendFetch(path: string, init: RequestInit = {}) {
   const user = firebaseAuth.currentUser;
   const token = user ? await user.getIdToken() : null;
+  const baseUrl = backendUrl.replace(/\/+$/, '');
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
 
-  const res = await fetch(`${backendUrl}${path}`, {
+  const res = await fetch(`${baseUrl}${normalizedPath}`, {
     ...init,
     headers: {
       'content-type': 'application/json',

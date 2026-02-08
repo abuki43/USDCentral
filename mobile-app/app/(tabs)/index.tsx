@@ -240,6 +240,13 @@ export default function TabOneScreen() {
             <Text style={styles.greeting}>Good evening</Text>
             <Text style={styles.userName}>{user?.displayName?.split(' ')[0] || 'User'}</Text>
           </View>
+          <Pressable 
+            style={styles.infoButton}
+            onPress={() => router.push('/learn' as any)}
+            android_ripple={{ color: 'rgba(99, 102, 241, 0.1)' }}
+          >
+            <Ionicons name="help-circle-outline" size={24} color="#0F172A" />
+          </Pressable>
         </View>
 
         {/* Balance Card */}
@@ -374,6 +381,19 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontFamily: 'Inter_700Bold',
     color: '#0F172A',
+  },
+  infoButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
   section: {
     marginBottom: 24,
