@@ -9,7 +9,7 @@ import transferRouter from "./routes/transfer.route.js";
 import webhooksRouter from "./routes/webhooks.route.js";
 import { processPendingSwapJobsOnce } from "./services/swap.service.js";
 import { startQueueWorkers } from "./services/queue.service.js";
-import { processBridgeToBaseJob } from "./services/webhooks.service.js";
+import { processBridgeToHubJob } from "./services/webhooks.service.js";
 import { config } from "./config.js";
 import { requestContext } from "./middleware/requestContext.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -47,7 +47,7 @@ app.listen(port, () => {
     logger.info({ port }, "Server is running");
 
     startQueueWorkers({
-        bridgeToBase: processBridgeToBaseJob,
+        bridgeToHub: processBridgeToHubJob,
         swapProcess: async () => {
             await processPendingSwapJobsOnce({ limit: 1 });
         },

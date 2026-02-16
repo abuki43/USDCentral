@@ -36,7 +36,7 @@ router.post(
   "/circle",
   // Raw body is required for signature verification.
   express.raw({ type: "*/*" }),
-  async (req, res) => {
+  async (req, res, next) => {
     try {
       console.log("Received Circle webhook");
       const keyId = req.header("X-Circle-Key-Id");
@@ -109,7 +109,7 @@ router.post(
       return res.status(200).json({ ok: true });
     } catch (error) {
       console.error("Error processing Circle webhook:", error);
-      return res.status(500).json({ message: (error as Error).message });
+      return next(error);
     }
   },
 );

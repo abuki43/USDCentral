@@ -3,9 +3,10 @@ import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
 
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import {
-  BASE_DESTINATION_CHAIN,
+  HUB_DESTINATION_CHAIN,
   type SupportedChain,
 } from "../lib/usdcAddresses.js";
+import { getWalletByChain } from "../lib/wallets.js";
 
 const BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN = {
   "ETH-SEPOLIA": "Ethereum_Sepolia",
@@ -36,15 +37,15 @@ const getBridgeKitAdapter = () => {
 
 const getBridgeKit = () => new BridgeKit();
 
-export const bridgeUsdcToBaseForUser = async (params: {
+export const bridgeUsdcToHubForUser = async (params: {
   uid: string;
   sourceChain: SupportedChain;
   amount: string;
 }) => {
   const { uid, sourceChain, amount } = params;
 
-  if (sourceChain === BASE_DESTINATION_CHAIN) {
-    throw new Error("Source chain is already Base.");
+  if (sourceChain === HUB_DESTINATION_CHAIN) {
+    throw new Error("Source chain is already the hub chain.");
   }
 
   const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
@@ -53,18 +54,29 @@ export const bridgeUsdcToBaseForUser = async (params: {
     | undefined;
 
   const sourceAddress = walletsByChain?.[sourceChain]?.address;
-  const baseAddress = walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
+  const hubAddress = walletsByChain?.[HUB_DESTINATION_CHAIN]?.address;
 
-  if (!sourceAddress || !baseAddress) {
-    throw new Error("Missing source or base wallet address for user.");
+  if (!sourceAddress || !hubAddress) {
+    console.error("Missing wallet addresses", {
+      uid,
+      sourceChain,
+      hubChain: HUB_DESTINATION_CHAIN,
+      walletsByChainKeys: Object.keys(walletsByChain ?? {}),
+      sourceAddress,
+      hubAddress,
+    });
+    throw new Error("Missing source or hub wallet address for user.");
   }
 
   const adapter = getBridgeKitAdapter();
   const kit = getBridgeKit();
 
+  const bridgeKitFromChain = BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[sourceChain];
+  const bridgeKitToChain = BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[HUB_DESTINATION_CHAIN];
+
   const from: { adapter: ReturnType<typeof getBridgeKitAdapter>; chain: BridgeKitChain; address: string } = {
     adapter,
-    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[sourceChain],
+    chain: bridgeKitFromChain,
     address: sourceAddress,
   };
 
@@ -75,36 +87,41 @@ export const bridgeUsdcToBaseForUser = async (params: {
     recipientAddress: string;
   } = {
     adapter,
-    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[BASE_DESTINATION_CHAIN],
-    address: baseAddress,
-    recipientAddress: baseAddress,
+    chain: bridgeKitToChain,
+    address: hubAddress,
+    recipientAddress: hubAddress,
   };
 
-  console.log("BridgeKit: USDC to Base", {
+  console.log("BridgeKit: USDC to Hub", {
     uid,
     amount,
+    sourceChainCircleKey: sourceChain,
+    hubChainCircleKey: HUB_DESTINATION_CHAIN,
     fromChain: from.chain,
     fromAddress: from.address,
     toChain: to.chain,
     toAddress: to.recipientAddress,
+    bridgeKitFromChain,
+    bridgeKitToChain,
+    walletsByChainKeys: Object.keys(walletsByChain ?? {}),
   });
 
-  return kit.bridge({
+  const result = await kit.bridge({
     from: from as any,
     to: to as any,
     amount,
   });
 };
 
-export const estimateBridgeUsdcToBaseForUser = async (params: {
+export const estimateBridgeUsdcToHubForUser = async (params: {
   uid: string;
   sourceChain: SupportedChain;
   amount: string;
 }) => {
   const { uid, sourceChain, amount } = params;
 
-  if (sourceChain === BASE_DESTINATION_CHAIN) {
-    throw new Error("Source chain is already Base.");
+  if (sourceChain === HUB_DESTINATION_CHAIN) {
+    throw new Error("Source chain is already the hub chain.");
   }
 
   const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
@@ -113,10 +130,10 @@ export const estimateBridgeUsdcToBaseForUser = async (params: {
     | undefined;
 
   const sourceAddress = walletsByChain?.[sourceChain]?.address;
-  const baseAddress = walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
+  const hubAddress = walletsByChain?.[HUB_DESTINATION_CHAIN]?.address;
 
-  if (!sourceAddress || !baseAddress) {
-    throw new Error("Missing source or base wallet address for user.");
+  if (!sourceAddress || !hubAddress) {
+    throw new Error("Missing source or hub wallet address for user.");
   }
 
   const adapter = getBridgeKitAdapter();
@@ -135,9 +152,9 @@ export const estimateBridgeUsdcToBaseForUser = async (params: {
     recipientAddress: string;
   } = {
     adapter,
-    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[BASE_DESTINATION_CHAIN],
-    address: baseAddress,
-    recipientAddress: baseAddress,
+    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[HUB_DESTINATION_CHAIN],
+    address: hubAddress,
+    recipientAddress: hubAddress,
   };
 
   return kit.estimate({
@@ -147,7 +164,7 @@ export const estimateBridgeUsdcToBaseForUser = async (params: {
   });
 };
 
-export const bridgeUsdcFromBaseForUser = async (params: {
+export const bridgeUsdcFromHubForUser = async (params: {
   uid: string;
   destinationChain: SupportedChain;
   amount: string;
@@ -155,8 +172,8 @@ export const bridgeUsdcFromBaseForUser = async (params: {
 }) => {
   const { uid, destinationChain, amount, recipientAddress } = params;
 
-  if (destinationChain === BASE_DESTINATION_CHAIN) {
-    throw new Error("Destination chain is already Base.");
+  if (destinationChain === HUB_DESTINATION_CHAIN) {
+    throw new Error("Destination chain is already the hub chain.");
   }
 
   const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
@@ -164,9 +181,9 @@ export const bridgeUsdcFromBaseForUser = async (params: {
     | Record<string, { address?: string }>
     | undefined;
 
-  const baseAddress = walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
-  if (!baseAddress) {
-    throw new Error("Missing base wallet address for user.");
+  const hubAddress = getWalletByChain(walletsByChain, HUB_DESTINATION_CHAIN)?.address;
+  if (!hubAddress) {
+    throw new Error("Missing hub wallet address for user.");
   }
 
   const adapter = getBridgeKitAdapter();
@@ -174,8 +191,8 @@ export const bridgeUsdcFromBaseForUser = async (params: {
 
   const from: { adapter: ReturnType<typeof getBridgeKitAdapter>; chain: BridgeKitChain; address: string } = {
     adapter,
-    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[BASE_DESTINATION_CHAIN],
-    address: baseAddress,
+    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[HUB_DESTINATION_CHAIN],
+    address: hubAddress,
   };
 
   const to: {
@@ -190,7 +207,7 @@ export const bridgeUsdcFromBaseForUser = async (params: {
     recipientAddress,
   };
 
-  console.log("BridgeKit: USDC from Base", {
+  console.log("BridgeKit: USDC from Hub", {
     uid,
     amount,
     fromChain: from.chain,
@@ -206,7 +223,7 @@ export const bridgeUsdcFromBaseForUser = async (params: {
   });
 };
 
-export const estimateBridgeUsdcFromBaseForUser = async (params: {
+export const estimateBridgeUsdcFromHubForUser = async (params: {
   uid: string;
   destinationChain: SupportedChain;
   amount: string;
@@ -214,8 +231,8 @@ export const estimateBridgeUsdcFromBaseForUser = async (params: {
 }) => {
   const { uid, destinationChain, amount, recipientAddress } = params;
 
-  if (destinationChain === BASE_DESTINATION_CHAIN) {
-    throw new Error("Destination chain is already Base.");
+  if (destinationChain === HUB_DESTINATION_CHAIN) {
+    throw new Error("Destination chain is already the hub chain.");
   }
 
   const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
@@ -223,9 +240,9 @@ export const estimateBridgeUsdcFromBaseForUser = async (params: {
     | Record<string, { address?: string }>
     | undefined;
 
-  const baseAddress = walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
-  if (!baseAddress) {
-    throw new Error("Missing base wallet address for user.");
+  const hubAddress = getWalletByChain(walletsByChain, HUB_DESTINATION_CHAIN)?.address;
+  if (!hubAddress) {
+    throw new Error("Missing hub wallet address for user.");
   }
 
   const adapter = getBridgeKitAdapter();
@@ -233,8 +250,8 @@ export const estimateBridgeUsdcFromBaseForUser = async (params: {
 
   const from: { adapter: ReturnType<typeof getBridgeKitAdapter>; chain: BridgeKitChain; address: string } = {
     adapter,
-    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[BASE_DESTINATION_CHAIN],
-    address: baseAddress,
+    chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[HUB_DESTINATION_CHAIN],
+    address: hubAddress,
   };
 
   const to: {

@@ -110,7 +110,6 @@ function RootLayoutNav({ onReady }: { onReady: () => void }) {
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="lock" />
-          <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
         </Stack>
 
         {showLockOverlay && (

@@ -1,12 +1,20 @@
 import { z } from "zod";
 
+const usdcAmountSchema = z
+  .string()
+  .trim()
+  .regex(/^\d+(\.\d{1,6})?$/, "Amount must be a positive number with up to 6 decimals.")
+  .refine((value) => {
+    const [whole = "0", fraction = ""] = value.split(".");
+    return !/^0+$/.test(whole) || !/^0*$/.test(fraction);
+  }, "Amount must be greater than 0.");
+
 export const quoteSchema = z.object({
-  amount: z.string().min(1),
-  rangePreset: z.enum(["narrow", "balanced", "wide"]),
+  amount: usdcAmountSchema,
 });
 
-export const createPositionSchema = quoteSchema;
+export const depositSchema = quoteSchema;
 
-export const uidQuerySchema = z.object({
-  uid: z.string().min(1),
+export const withdrawSchema = z.object({
+  amount: usdcAmountSchema,
 });

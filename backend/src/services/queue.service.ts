@@ -4,7 +4,7 @@ import { Redis } from "ioredis";
 import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
 
-export type BridgeToBaseJob = {
+export type BridgeToHubJob = {
   uid: string;
   txId: string;
   walletId: string | null;
@@ -21,21 +21,21 @@ const isQueueEnabled = () => Boolean(config.REDIS_URL);
 
 const getConnection = () => new Redis(config.REDIS_URL as string, { maxRetriesPerRequest: null });
 
-let bridgeQueue: Queue<BridgeToBaseJob> | null = null;
+let bridgeQueue: Queue<BridgeToHubJob> | null = null;
 let swapQueue: Queue<SwapProcessJob> | null = null;
 
 const ensureQueues = () => {
   if (!isQueueEnabled()) return;
   if (!bridgeQueue) {
-    bridgeQueue = new Queue<BridgeToBaseJob>("bridgeToBase", { connection: getConnection() });
+    bridgeQueue = new Queue<BridgeToHubJob>("bridgeToHub", { connection: getConnection() });
   }
   if (!swapQueue) {
     swapQueue = new Queue<SwapProcessJob>("swapProcess", { connection: getConnection() });
   }
 };
 
-export const enqueueBridgeToBaseJob = async (
-  data: BridgeToBaseJob,
+export const enqueueBridgeToHubJob = async (
+  data: BridgeToHubJob,
   fallback: () => void | Promise<void>,
 ) => {
   if (!isQueueEnabled()) {
@@ -81,18 +81,18 @@ export const enqueueSwapProcessJob = async (
 };
 
 export const startQueueWorkers = async (handlers: {
-  bridgeToBase: (job: BridgeToBaseJob) => Promise<void>;
+  bridgeToHub: (job: BridgeToHubJob) => Promise<void>;
   swapProcess: (job: SwapProcessJob) => Promise<void>;
 }) => {
   if (!isQueueEnabled()) return;
 
   const connection = getConnection();
 
-  new Worker<BridgeToBaseJob>(
-    "bridgeToBase",
-    async (job: Job<BridgeToBaseJob>) => handlers.bridgeToBase(job.data),
+  new Worker<BridgeToHubJob>(
+    "bridgeToHub",
+    async (job: Job<BridgeToHubJob>) => handlers.bridgeToHub(job.data),
     { connection },
-  ).on("failed", (job: Job<BridgeToBaseJob> | undefined, err: Error) => {
+  ).on("failed", (job: Job<BridgeToHubJob> | undefined, err: Error) => {
     logger.error({ err, jobId: job?.id }, "Bridge queue job failed");
   });
 

@@ -6,9 +6,11 @@ import {
   SUPPORTED_EVM_CHAINS,
   SUPPORTED_SOL_CHAINS,
   type SupportedChain,
+  normalizeSupportedChain,
   USDC_DECIMALS,
   USDC_TOKEN_ADDRESS_BY_CHAIN,
 } from "../lib/usdcAddresses.js";
+import { getWalletByChain } from "../lib/wallets.js";
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 
@@ -25,6 +27,18 @@ const fromBaseUnits = (value: bigint, decimals: number) => {
   const whole = s.slice(0, -decimals);
   const fraction = s.slice(-decimals).replace(/0+$/, "");
   return fraction ? `${whole}.${fraction}` : whole;
+};
+
+const getUsdcAmountFromBalanceResponse = (resp: any, tokenAddress: string) => {
+  const balances = (resp?.data?.tokenBalances ?? []) as Array<{
+    amount?: string;
+    token?: { tokenAddress?: string | null };
+  }>;
+  const match = balances.find(
+    (entry) =>
+      (entry?.token?.tokenAddress ?? "").toLowerCase() === tokenAddress.toLowerCase(),
+  );
+  return match?.amount ?? "0";
 };
 
 type CircleWalletByChain = Record<string, { walletId: string; address: string }>;
@@ -68,7 +82,8 @@ export const provisionCircleWalletsForUser = async (uid: string) => {
 
   const walletsByChain: CircleWalletByChain = {};
   for (const w of wallets) {
-    walletsByChain[w.blockchain] = { walletId: w.id, address: w.address };
+    const normalizedChain = normalizeSupportedChain(w.blockchain) ?? w.blockchain;
+    walletsByChain[normalizedChain] = { walletId: w.id, address: w.address };
 
     await firestoreAdmin
       .collection("circleWallets")
@@ -134,7 +149,7 @@ export const recomputeUnifiedUsdcBalance = async (uid: string) => {
   ];
 
   for (const chain of chains) {
-    const walletId = walletsByChain[chain]?.walletId;
+    const walletId = getWalletByChain(walletsByChain, chain)?.walletId;
     if (!walletId) continue;
 
     const tokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[chain];
@@ -144,7 +159,7 @@ export const recomputeUnifiedUsdcBalance = async (uid: string) => {
       includeAll: true,
     });
 
-    const amount = resp.data?.tokenBalances?.[0]?.amount ?? "0";
+    const amount = getUsdcAmountFromBalanceResponse(resp, tokenAddress);
     const micro = toBaseUnits(amount, USDC_DECIMALS);
     totalMicro += micro;
 

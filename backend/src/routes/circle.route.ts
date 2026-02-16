@@ -10,7 +10,7 @@ import {
 
 const router = Router();
 
-router.post("/provision", requireAuth, async (req, res) => {
+router.post("/provision", requireAuth, async (req, res, next) => {
   try {
     console.log("Provisioning circle wallets");
     const { user } = req as AuthenticatedRequest;
@@ -18,22 +18,21 @@ router.post("/provision", requireAuth, async (req, res) => {
     const balance = await recomputeUnifiedUsdcBalance(user.uid);
     res.json({ circle, balance });
   } catch (error) {
-    console.error("Provision failed:", error);
-    res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 
-router.post("/recompute-balance", requireAuth, async (req, res) => {
+router.post("/recompute-balance", requireAuth, async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
     const balance = await recomputeUnifiedUsdcBalance(user.uid);
     res.json({ balance });
   } catch (error) {
-    res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 
-router.get("/transactions", requireAuth, async (req, res) => {
+router.get("/transactions", requireAuth, async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
 
@@ -98,8 +97,7 @@ router.get("/transactions", requireAuth, async (req, res) => {
       pageBefore: (data as any).pageBefore,
     });
   } catch (error) {
-    console.error("List transactions failed:", error);
-    res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 

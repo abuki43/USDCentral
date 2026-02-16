@@ -11,14 +11,19 @@ import { getCircleClient } from "../lib/circleClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { upsertTransaction } from "../lib/transactions.js";
 import {
-  BASE_DESTINATION_CHAIN,
+  HUB_DESTINATION_CHAIN,
   USDC_TOKEN_ADDRESS_BY_CHAIN,
 } from "../lib/usdcAddresses.js";
+import { getWalletByChain } from "../lib/wallets.js";
 import { provisionCircleWalletsForUser, recomputeUnifiedUsdcBalance } from "../services/circle.service.js";
 
 const router = Router();
 
-router.get("/resolve", requireAuth, validateQuery(resolveRecipientQuerySchema), async (req, res) => {
+router.get(
+  "/resolve",
+  requireAuth,
+  validateQuery(resolveRecipientQuerySchema),
+  async (req, res, next) => {
   try {
     const { uid } = req.validatedQuery as { uid: string };
 
@@ -34,16 +39,16 @@ router.get("/resolve", requireAuth, validateQuery(resolveRecipientQuerySchema), 
       email: (data.email as string | undefined) ?? null,
     });
   } catch (error) {
-    console.error("Resolve recipient failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
-});
+  },
+);
 
 router.get(
   "/resolve-email",
   requireAuth,
   validateQuery(resolveRecipientEmailQuerySchema),
-  async (req, res) => {
+  async (req, res, next) => {
     try {
       const { email } = req.validatedQuery as { email: string };
 
@@ -68,13 +73,12 @@ router.get(
         email: (data.email as string | undefined) ?? null,
       });
     } catch (error) {
-      console.error("Resolve recipient by email failed:", error);
-      return res.status(500).json({ message: (error as Error).message });
+      return next(error);
     }
   },
 );
 
-router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, res) => {
+router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
     const { recipientUid, amount } = req.validatedBody as {
@@ -94,18 +98,24 @@ router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, 
     const senderDoc = await provisionCircleWalletsForUser(user.uid);
     const recipientDoc = await provisionCircleWalletsForUser(recipientUid);
 
-    const senderWalletId = senderDoc.walletsByChain?.[BASE_DESTINATION_CHAIN]?.walletId;
-    const recipientAddress = recipientDoc.walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
+    const senderWalletId = getWalletByChain(
+      senderDoc.walletsByChain,
+      HUB_DESTINATION_CHAIN,
+    )?.walletId;
+    const recipientAddress = getWalletByChain(
+      recipientDoc.walletsByChain,
+      HUB_DESTINATION_CHAIN,
+    )?.address;
 
     if (!senderWalletId) {
-      return res.status(400).json({ message: "Sender Base wallet not found." });
+      return res.status(400).json({ message: "Sender hub wallet not found." });
     }
     if (!recipientAddress) {
-      return res.status(400).json({ message: "Recipient Base wallet not found." });
+      return res.status(400).json({ message: "Recipient hub wallet not found." });
     }
 
     const circle = getCircleClient();
-    const usdcTokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[BASE_DESTINATION_CHAIN];
+    const usdcTokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN];
     const balances = await circle.getWalletTokenBalance({
       id: senderWalletId,
       tokenAddresses: [usdcTokenAddress],
@@ -141,7 +151,7 @@ router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, 
       status: "PENDING",
       amount,
       symbol: "USDC",
-      blockchain: BASE_DESTINATION_CHAIN,
+      blockchain: HUB_DESTINATION_CHAIN,
       relatedTxId: transferId ?? null,
       metadata: {
         direction: "OUTGOING",
@@ -159,7 +169,7 @@ router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, 
         recipientUid,
         recipientAddress,
         amount,
-        blockchain: BASE_DESTINATION_CHAIN,
+        blockchain: HUB_DESTINATION_CHAIN,
         transferId,
         transfer: transfer.data ?? null,
         createdAt: new Date().toISOString(),
@@ -174,7 +184,7 @@ router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, 
         senderUid: user.uid,
         senderWalletId,
         amount,
-        blockchain: BASE_DESTINATION_CHAIN,
+        blockchain: HUB_DESTINATION_CHAIN,
         transferId,
         transfer: transfer.data ?? null,
         createdAt: new Date().toISOString(),
@@ -184,8 +194,7 @@ router.post("/send", requireAuth, validateBody(sendTransferSchema), async (req, 
 
     return res.json({ transfer: transfer.data, transferId });
   } catch (error) {
-    console.error("Send transfer failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 

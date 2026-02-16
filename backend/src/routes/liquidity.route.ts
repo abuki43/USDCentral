@@ -1,129 +1,64 @@
 import { Router } from "express";
 
 import { requireAuth, type AuthenticatedRequest } from "../middleware/requireAuth.js";
-import { validateBody, validateQuery } from "../middleware/validate.js";
-import { createPositionSchema, quoteSchema, uidQuerySchema } from "../schemas/liquidity.schema.js";
+import { validateBody } from "../middleware/validate.js";
 import {
-  collectPositionFees,
-  createUsdcPosition,
-  getPositionStatus,
-  listPositionsStatusForUser,
-  listPositionsForUser,
-  quoteUsdcSingleSided,
-  withdrawPosition,
+  depositSchema,
+  quoteSchema,
+  withdrawSchema,
+} from "../schemas/liquidity.schema.js";
+import {
+  depositUsdcToCurve,
+  getCurvePositionForUser,
+  quoteUsdcCurveDeposit,
+  withdrawUsdcFromCurve,
 } from "../services/liquidity.service.js";
 
 const router = Router();
 
-router.post("/quote", requireAuth, validateBody(quoteSchema), async (req, res) => {
+router.post("/quote", requireAuth, validateBody(quoteSchema), async (req, res, next) => {
   try {
-    const { user } = req as AuthenticatedRequest;
-    const { amount, rangePreset } = req.validatedBody as {
-      amount: string;
-      rangePreset: "narrow" | "balanced" | "wide";
-    };
+    const { amount } = req.validatedBody as { amount: string };
 
-    const quote = await quoteUsdcSingleSided({
-      uid: user.uid,
-      amount,
-      rangePreset,
-    });
+    const quote = await quoteUsdcCurveDeposit({ amount });
 
     return res.json({ quote });
   } catch (error) {
-    console.error("Quote failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 
-router.post("/positions", requireAuth, validateBody(createPositionSchema), async (req, res) => {
+router.post("/deposit", requireAuth, validateBody(depositSchema), async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
-    const { amount, rangePreset } = req.validatedBody as {
-      amount: string;
-      rangePreset: "narrow" | "balanced" | "wide";
-    };
+    const { amount } = req.validatedBody as { amount: string };
 
-    const position = await createUsdcPosition({
-      uid: user.uid,
-      amount,
-      rangePreset,
-    });
+    const result = await depositUsdcToCurve({ uid: user.uid, amount });
 
+    return res.json({ result });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/position", requireAuth, async (req, res, next) => {
+  try {
+    const { user } = req as AuthenticatedRequest;
+    const position = await getCurvePositionForUser(user.uid);
     return res.json({ position });
   } catch (error) {
-    console.error("Create position failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 
-router.get("/positions", requireAuth, async (req, res) => {
+router.post("/withdraw", requireAuth, validateBody(withdrawSchema), async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
-    const positions = await listPositionsForUser(user.uid);
-    return res.json({ positions });
-  } catch (error) {
-    console.error("List positions failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
-  }
-});
-
-router.post("/positions/:id/collect", requireAuth, async (req, res) => {
-  try {
-    const { user } = req as AuthenticatedRequest;
-    const positionId = req.params.id;
-    if (typeof positionId !== "string" || !positionId) {
-      return res.status(400).json({ message: "Missing position id." });
-    }
-    const result = await collectPositionFees({ uid: user.uid, positionId });
+    const { amount } = req.validatedBody as { amount: string };
+    const result = await withdrawUsdcFromCurve({ uid: user.uid, amount });
     return res.json({ result });
   } catch (error) {
-    console.error("Collect failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
-  }
-});
-
-router.get("/positions/:id/status", validateQuery(uidQuerySchema), async (req, res) => {
-  try {
-    const { uid } = req.validatedQuery as { uid: string };
-
-    const positionId = req.params.id;
-    if (typeof positionId !== "string" || !positionId) {
-      return res.status(400).json({ message: "Missing position id." });
-    }
-
-    const status = await getPositionStatus({ uid, positionId });
-    return res.json({ status });
-  } catch (error) {
-    console.error("Get position status failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
-  }
-});
-
-router.get("/positions/status/by-uid", validateQuery(uidQuerySchema), async (req, res) => {
-  try {
-    const { uid } = req.validatedQuery as { uid: string };
-
-    const positions = await listPositionsStatusForUser(uid);
-    return res.json({ positions });
-  } catch (error) {
-    console.error("List position statuses failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
-  }
-});
-
-router.post("/positions/:id/withdraw", requireAuth, async (req, res) => {
-  try {
-    const { user } = req as AuthenticatedRequest;
-    const positionId = req.params.id;
-    if (typeof positionId !== "string" || !positionId) {
-      return res.status(400).json({ message: "Missing position id." });
-    }
-    const result = await withdrawPosition({ uid: user.uid, positionId });
-    return res.json({ result });
-  } catch (error) {
-    console.error("Withdraw position failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 

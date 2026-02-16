@@ -3,13 +3,14 @@ import dotenv from "dotenv";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { getCircleClient } from "../lib/circleClient.js";
 import {
-  BASE_DESTINATION_CHAIN,
+  HUB_DESTINATION_CHAIN,
   SUPPORTED_EVM_CHAINS,
   type SupportedChain,
   USDC_DECIMALS,
   USDC_TOKEN_ADDRESS_BY_CHAIN,
 } from "../lib/usdcAddresses.js";
-import { bridgeUsdcToBaseForUser } from "../services/bridge.service.js";
+import { getWalletByChain } from "../lib/wallets.js";
+import { bridgeUsdcToHubForUser } from "../services/bridge.service.js";
 import { recomputeUnifiedUsdcBalance } from "../services/circle.service.js";
 
 dotenv.config({ path: ".env.local" });
@@ -39,7 +40,28 @@ const minAmountBase = toBaseUnits(minAmount, USDC_DECIMALS);
 const circle = getCircleClient();
 
 const getWalletId = (data: any, chain: SupportedChain) =>
-  data?.circle?.walletsByChain?.[chain]?.walletId as string | undefined;
+  getWalletByChain(data?.circle?.walletsByChain, chain)?.walletId as
+    | string
+    | undefined;
+
+const getUsdcAmountFromBalanceResponse = (resp: any, tokenAddress: string) => {
+  const balances = (resp?.data?.tokenBalances ?? []) as Array<{
+    amount?: string;
+    token?: { tokenAddress?: string | null };
+  }>;
+  const match = balances.find(
+    (entry) =>
+      (entry?.token?.tokenAddress ?? "").toLowerCase() === tokenAddress.toLowerCase(),
+  );
+  return match?.amount ?? "0";
+};
+
+const getStepTxHash = (result: any, stepName: string) => {
+  const steps = result?.steps ?? result?.result?.steps ?? [];
+  if (!Array.isArray(steps)) return null;
+  const step = steps.find((s: any) => s?.name === stepName);
+  return step?.txHash ?? step?.data?.txHash ?? null;
+};
 
 const main = async () => {
   console.log("[sweep] start", { dryRun, uidFilter, minAmount });
@@ -53,7 +75,7 @@ const main = async () => {
     const tasks: Array<{ chain: SupportedChain; amount: string }> = [];
 
     for (const chain of SUPPORTED_EVM_CHAINS as unknown as SupportedChain[]) {
-      if (chain === BASE_DESTINATION_CHAIN) continue;
+      if (chain === HUB_DESTINATION_CHAIN) continue;
 
       const walletId = getWalletId(data, chain);
       if (!walletId) continue;
@@ -65,7 +87,7 @@ const main = async () => {
         includeAll: true,
       });
 
-      const amount = resp.data?.tokenBalances?.[0]?.amount ?? "0";
+      const amount = getUsdcAmountFromBalanceResponse(resp, tokenAddress);
       const amountBase = toBaseUnits(amount, USDC_DECIMALS);
       if (amountBase <= minAmountBase) continue;
 
@@ -79,21 +101,40 @@ const main = async () => {
 
     for (const task of tasks) {
       if (dryRun) {
-        console.log("[sweep] dry-run", { uid, chain: task.chain, amount: task.amount });
+        console.log("[sweep] dry-run", {
+          uid,
+          sourceChain: task.chain,
+          destinationChain: HUB_DESTINATION_CHAIN,
+          amount: task.amount,
+        });
         continue;
       }
 
       try {
-        console.log("[sweep] bridging", { uid, chain: task.chain, amount: task.amount });
-        await bridgeUsdcToBaseForUser({
+        console.log("[sweep] bridging", {
+          uid,
+          sourceChain: task.chain,
+          destinationChain: HUB_DESTINATION_CHAIN,
+          amount: task.amount,
+        });
+        const result = await bridgeUsdcToHubForUser({
           uid,
           sourceChain: task.chain,
           amount: task.amount,
         });
+        console.log("[sweep] bridge submitted", {
+          uid,
+          sourceChain: task.chain,
+          destinationChain: HUB_DESTINATION_CHAIN,
+          amount: task.amount,
+          burnTxHash: getStepTxHash(result, "burn"),
+          mintTxHash: getStepTxHash(result, "mint"),
+        });
       } catch (error) {
         console.error("[sweep] bridge failed", {
           uid,
-          chain: task.chain,
+          sourceChain: task.chain,
+          destinationChain: HUB_DESTINATION_CHAIN,
           amount: task.amount,
           error: (error as Error)?.message,
         });

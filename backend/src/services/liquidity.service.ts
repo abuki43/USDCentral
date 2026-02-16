@@ -3,15 +3,20 @@ import crypto from "crypto";
 import { ethers } from "ethers";
 
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
-import { BASE_DESTINATION_CHAIN, USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
+import {
+  HUB_DESTINATION_CHAIN,
+  USDC_DECIMALS,
+  USDC_TOKEN_ADDRESS_BY_CHAIN,
+} from "../lib/usdcAddresses.js";
+import { getWalletByChain } from "../lib/wallets.js";
 import { getCircleClient } from "../lib/circleClient.js";
 import { upsertTransaction } from "../lib/transactions.js";
+import { config } from "../config.js";
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 
-const USDC_DECIMALS = 6;
-const DEFAULT_DEADLINE_SECONDS = 20 * 60;
-const MAX_UINT128 = (2n ** 128n) - 1n;
+const DEFAULT_SLIPPAGE_BPS = 50;
+const USDC_AMOUNT_REGEX = /^\d+(\.\d{1,6})?$/;
 
 const toBaseUnits = (amount: string, decimals: number) => {
   const [whole, fractionRaw = ""] = amount.split(".");
@@ -19,6 +24,32 @@ const toBaseUnits = (amount: string, decimals: number) => {
   const normalizedWhole = (whole ?? "0").replace(/^0+(?=\d)/, "") || "0";
   const normalized = `${normalizedWhole}${fraction}`.replace(/^0+(?=\d)/, "") || "0";
   return BigInt(normalized);
+};
+
+const parseUsdcAmountToBaseUnits = (rawAmount: string) => {
+  const amount = rawAmount.trim();
+  if (!USDC_AMOUNT_REGEX.test(amount)) {
+    throw new Error("Amount must be a positive USDC amount with up to 6 decimals.");
+  }
+
+  const value = toBaseUnits(amount, USDC_DECIMALS);
+  if (value <= 0n) {
+    throw new Error("Amount must be greater than 0.");
+  }
+  return value;
+};
+
+const fromBaseUnits = (value: bigint, decimals: number) => {
+  const s = value.toString().padStart(decimals + 1, "0");
+  const whole = s.slice(0, -decimals);
+  const fraction = s.slice(-decimals).replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
+};
+
+const applySlippage = (amount: bigint, slippageBps: number) => {
+  if (slippageBps <= 0) return amount;
+  const numerator = BigInt(10000 - slippageBps);
+  return (amount * numerator) / 10000n;
 };
 
 const submitCircleContractExecution = async (params: {
@@ -48,33 +79,79 @@ const submitCircleContractExecution = async (params: {
   return txId as string;
 };
 
-type LiquidityConfig = {
-  positionManagerAddress: string;
+type CurveConfig = {
   poolAddress: string;
-  token0: string;
-  token1: string;
-  fee: number;
+  lpTokenAddress: string;
+  usdcIndex: number;
+  poolSize: number;
+  expectedPairTokenAddress: string;
+  slippageBps: number;
 };
 
-const getLiquidityConfig = (): LiquidityConfig => {
-  const positionManagerAddress =
-    process.env.UNISWAP_V3_POSITION_MANAGER_ADDRESS ?? ethers.ZeroAddress;
-  const poolAddress = process.env.UNISWAP_V3_POOL_ADDRESS;
-  const token0 = process.env.UNISWAP_V3_POOL_TOKEN0_ADDRESS;
-  const token1 = process.env.UNISWAP_V3_POOL_TOKEN1_ADDRESS;
-  const feeRaw = process.env.UNISWAP_V3_POOL_FEE;
+const getCurveConfig = (): CurveConfig => {
+  const poolAddress = config.CURVE_POOL_ADDRESS ?? "";
+  const lpTokenAddress = config.CURVE_LP_TOKEN_ADDRESS ?? "";
+  const usdcIndexRaw = config.CURVE_USDC_INDEX ?? "";
+  const poolSizeRaw = config.CURVE_POOL_SIZE ?? "";
+  const expectedPairTokenAddressRaw = config.CURVE_EXPECTED_PAIR_TOKEN_ADDRESS ?? "";
+  const slippageRaw = config.CURVE_SLIPPAGE_BPS;
 
-  if (!poolAddress || !token0 || !token1 || !feeRaw) {
-    throw new Error("Uniswap config missing. Set UNISWAP_V3_* env variables.");
+  if (
+    !poolAddress ||
+    !lpTokenAddress ||
+    !usdcIndexRaw ||
+    !poolSizeRaw ||
+    !expectedPairTokenAddressRaw
+  ) {
+    throw new Error(
+      "Curve config missing. Set CURVE_POOL_ADDRESS, CURVE_LP_TOKEN_ADDRESS, CURVE_USDC_INDEX, CURVE_POOL_SIZE, CURVE_EXPECTED_PAIR_TOKEN_ADDRESS.",
+    );
   }
 
-  const fee = Number(feeRaw);
-  return { positionManagerAddress, poolAddress, token0, token1, fee };
+  const usdcIndex = Number(usdcIndexRaw);
+  const poolSize = Number(poolSizeRaw);
+  const expectedPairTokenAddress = expectedPairTokenAddressRaw.toLowerCase();
+  const slippageBps =
+    slippageRaw == null || slippageRaw === ""
+      ? DEFAULT_SLIPPAGE_BPS
+      : Number(slippageRaw);
+
+  if (!Number.isInteger(usdcIndex) || usdcIndex < 0) {
+    throw new Error("CURVE_USDC_INDEX must be a non-negative integer.");
+  }
+  if (!Number.isInteger(poolSize) || poolSize <= 0) {
+    throw new Error("CURVE_POOL_SIZE must be a positive integer.");
+  }
+  if (!ethers.isAddress(expectedPairTokenAddress)) {
+    throw new Error("CURVE_EXPECTED_PAIR_TOKEN_ADDRESS must be a valid EVM address.");
+  }
+  if (
+    expectedPairTokenAddress ===
+    USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN].toLowerCase()
+  ) {
+    throw new Error("CURVE_EXPECTED_PAIR_TOKEN_ADDRESS must not be the USDC address.");
+  }
+  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 500) {
+    throw new Error("CURVE_SLIPPAGE_BPS must be between 0 and 500.");
+  }
+
+  if (poolSize !== 2 && poolSize !== 3) {
+    throw new Error("Only Curve pools with size 2 or 3 are supported right now.");
+  }
+
+  return {
+    poolAddress,
+    lpTokenAddress,
+    usdcIndex,
+    poolSize,
+    expectedPairTokenAddress,
+    slippageBps,
+  };
 };
 
 const getProvider = () => {
-  const url = process.env.BASE_SEPOLIA_RPC_URL ?? process.env.ARBITRUM_SEPOLIA_RPC_URL;
-  if (!url) throw new Error("Missing BASE_SEPOLIA_RPC_URL");
+  const url = config.HUB_CHAIN_RPC_URL;
+  if (!url) throw new Error("Missing HUB_CHAIN_RPC_URL");
   return new ethers.JsonRpcProvider(url);
 };
 
@@ -89,38 +166,180 @@ const erc20ReadAbi = [
   "function decimals() view returns (uint8)",
 ];
 
-const positionManagerIface = new ethers.Interface([
-  "function mint((address token0,address token1,uint24 fee,int24 tickLower,int24 tickUpper,uint256 amount0Desired,uint256 amount1Desired,uint256 amount0Min,uint256 amount1Min,address recipient,uint256 deadline)) returns (uint256 tokenId,uint128 liquidity,uint256 amount0,uint256 amount1)",
-  "function collect((uint256 tokenId,address recipient,uint128 amount0Max,uint128 amount1Max)) returns (uint256 amount0,uint256 amount1)",
-  "function decreaseLiquidity((uint256 tokenId,uint128 liquidity,uint256 amount0Min,uint256 amount1Min,uint256 deadline)) returns (uint256 amount0,uint256 amount1)",
-  "function positions(uint256 tokenId) view returns (uint96 nonce,address operator,address token0,address token1,uint24 fee,int24 tickLower,int24 tickUpper,uint128 liquidity,uint256 feeGrowthInside0LastX128,uint256 feeGrowthInside1LastX128,uint128 tokensOwed0,uint128 tokensOwed1)",
+const curvePoolIface = new ethers.Interface([
+  "function add_liquidity(uint256[2] amounts, uint256 min_mint_amount)",
+  "function add_liquidity(uint256[3] amounts, uint256 min_mint_amount)",
+  "function add_liquidity(uint256[] amounts, uint256 min_mint_amount)",
+  "function add_liquidity(uint256[2] amounts, uint256 min_mint_amount, address receiver)",
+  "function add_liquidity(uint256[3] amounts, uint256 min_mint_amount, address receiver)",
+  "function add_liquidity(uint256[] amounts, uint256 min_mint_amount, address receiver)",
+  "function remove_liquidity_one_coin(uint256 burn_amount, int128 i, uint256 min_received)",
+  "function remove_liquidity_one_coin(uint256 burn_amount, int128 i, uint256 min_received, address receiver)",
+  "function remove_liquidity_one_coin(uint256 burn_amount, uint256 i, uint256 min_received)",
+  "function remove_liquidity_one_coin(uint256 burn_amount, uint256 i, uint256 min_received, address receiver)",
+  "function calc_withdraw_one_coin(uint256 burn_amount, int128 i) view returns (uint256)",
+  "function calc_token_amount(uint256[2] amounts, bool is_deposit) view returns (uint256)",
+  "function calc_token_amount(uint256[2] amounts) view returns (uint256)",
+  "function calc_token_amount(uint256[3] amounts, bool is_deposit) view returns (uint256)",
+  "function calc_token_amount(uint256[3] amounts) view returns (uint256)",
+  "function calc_token_amount(uint256[] amounts, bool is_deposit) view returns (uint256)",
+  "function calc_token_amount(uint256[] amounts) view returns (uint256)",
+  "function coins(uint256 index) view returns (address)",
 ]);
 
-const toUnifiedStatus = (state?: string | null) => {
-  const normalized = (state ?? "").toUpperCase();
-  if (["FAILED", "CANCELLED", "DENIED", "REJECTED"].includes(normalized)) return "FAILED";
-  if (["CONFIRMED", "COMPLETE", "COMPLETED"].includes(normalized)) return "COMPLETED";
-  return "PENDING";
+let curveVerificationPromise: Promise<void> | null = null;
+let curveVerified = false;
+
+type CurveMethodCacheEntry = {
+  calcTokenAmountSig?: string;
+  addLiquiditySig?: string;
+  removeOneCoinSig?: string;
 };
 
-const poolIface = new ethers.Interface([
-  "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)",
-  "function tickSpacing() view returns (int24)",
-]);
+const curveMethodCache = new Map<string, CurveMethodCacheEntry>();
 
-const getTickRange = (params: { tick: number; tickSpacing: number; preset: string }) => {
-  const { tick, tickSpacing, preset } = params;
-  const aligned = Math.floor(tick / tickSpacing) * tickSpacing;
-  const widthByPreset: Record<string, number> = {
-    narrow: 2,
-    balanced: 6,
-    wide: 12,
-  };
-  const width = widthByPreset[preset] ?? 6;
-  return {
-    tickLower: aligned - width * tickSpacing,
-    tickUpper: aligned + width * tickSpacing,
-  };
+const getCurveMethodCacheKey = (poolAddress: string, poolSize: number) =>
+  `${poolAddress.toLowerCase()}:${poolSize}`;
+
+const getCurveMethodCacheEntry = (poolAddress: string, poolSize: number) => {
+  const key = getCurveMethodCacheKey(poolAddress, poolSize);
+  const cached = curveMethodCache.get(key);
+  if (cached) return cached;
+  const empty: CurveMethodCacheEntry = {};
+  curveMethodCache.set(key, empty);
+  return empty;
+};
+
+const getErrorMessage = (error: unknown) =>
+  (error as any)?.shortMessage ??
+  (error as any)?.reason ??
+  (error as Error)?.message ??
+  "unknown error";
+
+const getSelectorForSignature = (signature: string) => {
+  try {
+    return curvePoolIface.getFunction(signature)?.selector ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+};
+
+const isLikelyNoDataSignatureRevert = (error: unknown) => {
+  const message = `${getErrorMessage(error)} ${(error as any)?.message ?? ""}`.toLowerCase();
+  return (
+    message.includes("no data present") ||
+    message.includes("require(false)") ||
+    message.includes("function selector was not recognized")
+  );
+};
+
+const isLikelyStateDependentRevert = (error: unknown) => {
+  const message = `${getErrorMessage(error)} ${(error as any)?.message ?? ""}`.toLowerCase();
+  if (!message || isLikelyNoDataSignatureRevert(error)) return false;
+
+  return (
+    message.includes("transfer amount exceeds balance") ||
+    message.includes("erc20insufficientbalance") ||
+    message.includes("insufficient balance") ||
+    message.includes("transfer amount exceeds allowance") ||
+    message.includes("erc20insufficientallowance") ||
+    message.includes("insufficient allowance") ||
+    message.includes("min_mint_amount") ||
+    message.includes("min_received") ||
+    message.includes("slippage") ||
+    message.includes("not enough coins removed") ||
+    message.includes("burn amount exceeds") ||
+    message.includes("insufficient lp")
+  );
+};
+
+const ensureCurvePoolVerified = async () => {
+  if (curveVerified) return;
+  if (!curveVerificationPromise) {
+    curveVerificationPromise = (async () => {
+      const { poolAddress, lpTokenAddress, usdcIndex, poolSize, expectedPairTokenAddress } =
+        getCurveConfig();
+      const provider = getProvider();
+
+      if (usdcIndex >= poolSize) {
+        throw new Error(
+          `CURVE_USDC_INDEX ${usdcIndex} is out of range for pool size ${poolSize}.`,
+        );
+      }
+
+      const pool = new ethers.Contract(poolAddress, curvePoolIface, provider);
+      const coinAddresses = await Promise.all(
+        Array.from({ length: poolSize }, (_v, idx) =>
+          (pool as any).coins(idx).then((address: string) => address),
+        ),
+      );
+
+      const expectedUsdc =
+        USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN].toLowerCase();
+      const actualUsdc = coinAddresses[usdcIndex]?.toLowerCase();
+
+      if (!actualUsdc) {
+        throw new Error("Curve pool verification failed: missing coin address.");
+      }
+
+      if (actualUsdc !== expectedUsdc) {
+        throw new Error(
+          `Curve pool USDC index mismatch. Expected ${expectedUsdc} at index ${usdcIndex}, got ${actualUsdc}.`,
+        );
+      }
+
+      const nonUsdcCoinAddresses = coinAddresses
+        .map((address) => address.toLowerCase())
+        .filter((_addr, index) => index !== usdcIndex);
+      if (poolSize === 2) {
+        const actualPair = nonUsdcCoinAddresses[0];
+        if (!actualPair || actualPair !== expectedPairTokenAddress) {
+          throw new Error(
+            `Curve pool pair mismatch. Expected pair token ${expectedPairTokenAddress}, got ${actualPair ?? "missing"}.`,
+          );
+        }
+      } else if (!nonUsdcCoinAddresses.includes(expectedPairTokenAddress)) {
+        throw new Error(
+          `Curve pool pair mismatch. Expected to find pair token ${expectedPairTokenAddress} among ${nonUsdcCoinAddresses.join(", ")}.`,
+        );
+      }
+
+      const symbolChecks = await Promise.all(
+        coinAddresses.map(async (addr) => {
+          const token = new ethers.Contract(addr, erc20ReadAbi, provider);
+          const symbol = await (token as any).symbol();
+          return { addr, symbol };
+        }),
+      );
+
+      const usdcSymbol = symbolChecks[usdcIndex]?.symbol ?? "";
+      if (!usdcSymbol.toUpperCase().includes("USDC")) {
+        throw new Error(
+          `Curve pool verification failed: coin at index ${usdcIndex} is not USDC (symbol ${usdcSymbol}).`,
+        );
+      }
+
+      const lpToken = new ethers.Contract(lpTokenAddress, erc20ReadAbi, provider);
+      try {
+        await Promise.all([(lpToken as any).symbol(), (lpToken as any).decimals()]);
+      } catch (error) {
+        throw new Error(
+          `Curve LP token verification failed for ${lpTokenAddress}: ${
+            (error as Error)?.message ?? "unknown error"
+          }`,
+        );
+      }
+    })()
+      .then(() => {
+        curveVerified = true;
+      })
+      .catch((error) => {
+        curveVerificationPromise = null;
+        throw error;
+      });
+  }
+
+  await curveVerificationPromise;
 };
 
 const waitForCircleTxCompletion = async (params: {
@@ -160,143 +379,462 @@ const waitForCircleTxCompletion = async (params: {
   throw new Error(`${label} transaction did not complete in time.`);
 };
 
-export const quoteUsdcSingleSided = async (params: {
-  uid: string;
-  amount: string;
-  rangePreset: "narrow" | "balanced" | "wide";
+const getUserHubWallet = async (uid: string) => {
+  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
+  const wallet = getWalletByChain(
+    userSnap.data()?.circle?.walletsByChain as Record<string, any> | undefined,
+    HUB_DESTINATION_CHAIN,
+  );
+
+  if (!wallet?.walletId || !wallet?.address) {
+    throw new Error("Missing user wallet for hub chain.");
+  }
+
+  return { walletId: wallet.walletId, address: wallet.address };
+};
+
+const getCurvePositionRef = (uid: string) =>
+  firestoreAdmin.collection("users").doc(uid).collection("positions").doc("curve");
+
+const buildAmountsArray = (poolSize: number, usdcIndex: number, amount: string) => {
+  const amounts = Array.from({ length: poolSize }, () => "0");
+  amounts[usdcIndex] = amount;
+  return amounts;
+};
+
+const toFixedAmounts = (poolSize: number, amounts: string[]) => {
+  if (poolSize === 2) return [amounts[0]!, amounts[1]!] as [string, string];
+  return [amounts[0]!, amounts[1]!, amounts[2]!] as [string, string, string];
+};
+
+const prioritizeCachedSignature = (cached: string | undefined, candidates: string[]) => {
+  if (!cached || !candidates.includes(cached)) return candidates;
+  return [cached, ...candidates.filter((candidate) => candidate !== cached)];
+};
+
+const getCalcTokenAmountCandidates = (poolSize: number) =>
+  poolSize === 2
+    ? [
+        "calc_token_amount(uint256[2],bool)",
+        "calc_token_amount(uint256[2])",
+        "calc_token_amount(uint256[],bool)",
+        "calc_token_amount(uint256[])",
+      ]
+    : [
+        "calc_token_amount(uint256[3],bool)",
+        "calc_token_amount(uint256[3])",
+        "calc_token_amount(uint256[],bool)",
+        "calc_token_amount(uint256[])",
+      ];
+
+const getAddLiquidityCandidates = (poolSize: number) =>
+  poolSize === 2
+    ? [
+        "add_liquidity(uint256[2],uint256)",
+        "add_liquidity(uint256[2],uint256,address)",
+        "add_liquidity(uint256[],uint256)",
+        "add_liquidity(uint256[],uint256,address)",
+      ]
+    : [
+        "add_liquidity(uint256[3],uint256)",
+        "add_liquidity(uint256[3],uint256,address)",
+        "add_liquidity(uint256[],uint256)",
+        "add_liquidity(uint256[],uint256,address)",
+      ];
+
+const getRemoveOneCoinCandidates = () => [
+  "remove_liquidity_one_coin(uint256,int128,uint256)",
+  "remove_liquidity_one_coin(uint256,int128,uint256,address)",
+  "remove_liquidity_one_coin(uint256,uint256,uint256)",
+  "remove_liquidity_one_coin(uint256,uint256,uint256,address)",
+];
+
+const buildCalcTokenAmountArgs = (params: {
+  signature: string;
+  poolSize: number;
+  amounts: string[];
 }) => {
-  const { amount, rangePreset } = params;
-  const config = getLiquidityConfig();
+  const { signature, poolSize, amounts } = params;
+  const fixed = toFixedAmounts(poolSize, amounts);
+
+  if (signature === "calc_token_amount(uint256[2],bool)") return [fixed, true];
+  if (signature === "calc_token_amount(uint256[2])") return [fixed];
+  if (signature === "calc_token_amount(uint256[3],bool)") return [fixed, true];
+  if (signature === "calc_token_amount(uint256[3])") return [fixed];
+  if (signature === "calc_token_amount(uint256[],bool)") return [amounts, true];
+  if (signature === "calc_token_amount(uint256[])") return [amounts];
+
+  throw new Error(`Unsupported calc_token_amount signature: ${signature}`);
+};
+
+const buildAddLiquidityArgs = (params: {
+  signature: string;
+  poolSize: number;
+  amounts: string[];
+  minMintAmount: string;
+  walletAddress: string;
+}) => {
+  const { signature, poolSize, amounts, minMintAmount, walletAddress } = params;
+  const fixed = toFixedAmounts(poolSize, amounts);
+
+  if (signature === "add_liquidity(uint256[2],uint256)") return [fixed, minMintAmount];
+  if (signature === "add_liquidity(uint256[3],uint256)") return [fixed, minMintAmount];
+  if (signature === "add_liquidity(uint256[],uint256)") return [amounts, minMintAmount];
+  if (signature === "add_liquidity(uint256[2],uint256,address)")
+    return [fixed, minMintAmount, walletAddress];
+  if (signature === "add_liquidity(uint256[3],uint256,address)")
+    return [fixed, minMintAmount, walletAddress];
+  if (signature === "add_liquidity(uint256[],uint256,address)")
+    return [amounts, minMintAmount, walletAddress];
+
+  throw new Error(`Unsupported add_liquidity signature: ${signature}`);
+};
+
+const buildRemoveOneCoinArgs = (params: {
+  signature: string;
+  burnAmount: string;
+  usdcIndex: number;
+  minReceived: string;
+  walletAddress: string;
+}) => {
+  const { signature, burnAmount, usdcIndex, minReceived, walletAddress } = params;
+
+  if (signature === "remove_liquidity_one_coin(uint256,int128,uint256)") {
+    return [burnAmount, usdcIndex, minReceived];
+  }
+  if (signature === "remove_liquidity_one_coin(uint256,int128,uint256,address)") {
+    return [burnAmount, usdcIndex, minReceived, walletAddress];
+  }
+  if (signature === "remove_liquidity_one_coin(uint256,uint256,uint256)") {
+    return [burnAmount, BigInt(usdcIndex), minReceived];
+  }
+  if (signature === "remove_liquidity_one_coin(uint256,uint256,uint256,address)") {
+    return [burnAmount, BigInt(usdcIndex), minReceived, walletAddress];
+  }
+
+  throw new Error(`Unsupported remove_liquidity_one_coin signature: ${signature}`);
+};
+
+const estimateLpTokens = async (params: {
+  poolAddress: string;
+  poolSize: number;
+  amounts: string[];
+  provider: ethers.JsonRpcProvider;
+}) => {
+  const pool = new ethers.Contract(params.poolAddress, curvePoolIface, params.provider);
+  const cache = getCurveMethodCacheEntry(params.poolAddress, params.poolSize);
+  const candidates = prioritizeCachedSignature(
+    cache.calcTokenAmountSig,
+    getCalcTokenAmountCandidates(params.poolSize),
+  );
+  const attempted: string[] = [];
+
+  for (const signature of candidates) {
+    try {
+      const args = buildCalcTokenAmountArgs({
+        signature,
+        poolSize: params.poolSize,
+        amounts: params.amounts,
+      });
+      const result = await (pool as any)[signature](...args);
+      if (cache.calcTokenAmountSig !== signature) {
+        console.info("[liquidity] selected calc_token_amount signature", {
+          poolAddress: params.poolAddress,
+          poolSize: params.poolSize,
+          signature,
+          selector: getSelectorForSignature(signature),
+        });
+      }
+      cache.calcTokenAmountSig = signature;
+      return result as bigint;
+    } catch (error) {
+      attempted.push(
+        `${signature} [${getSelectorForSignature(signature)}] -> ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Failed to quote Curve LP tokens for pool ${params.poolAddress}. Attempted: ${attempted.join(" | ")}`,
+  );
+};
+
+const resolveAddLiquidityCallData = async (params: {
+  poolAddress: string;
+  poolSize: number;
+  amounts: string[];
+  minMintAmount: string;
+  walletAddress: string;
+  provider: ethers.JsonRpcProvider;
+}) => {
+  const {
+    poolAddress,
+    poolSize,
+    amounts,
+    minMintAmount,
+    walletAddress,
+    provider,
+  } = params;
+
+  const cache = getCurveMethodCacheEntry(poolAddress, poolSize);
+  const signatures = prioritizeCachedSignature(
+    cache.addLiquiditySig,
+    getAddLiquidityCandidates(poolSize),
+  );
+  const attempted: string[] = [];
+
+  for (const signature of signatures) {
+    try {
+      const args = buildAddLiquidityArgs({
+        signature,
+        poolSize,
+        amounts,
+        minMintAmount,
+        walletAddress,
+      });
+      const callData = curvePoolIface.encodeFunctionData(signature, args);
+      await provider.call({
+        from: walletAddress,
+        to: poolAddress,
+        data: callData,
+      });
+      if (cache.addLiquiditySig !== signature) {
+        console.info("[liquidity] selected add_liquidity signature", {
+          poolAddress,
+          poolSize,
+          signature,
+          selector: getSelectorForSignature(signature),
+        });
+      }
+      cache.addLiquiditySig = signature;
+      return { callData, signature };
+    } catch (error) {
+      const args = buildAddLiquidityArgs({
+        signature,
+        poolSize,
+        amounts,
+        minMintAmount,
+        walletAddress,
+      });
+      const callData = curvePoolIface.encodeFunctionData(signature, args);
+      if (isLikelyStateDependentRevert(error)) {
+        console.info("[liquidity] selected add_liquidity signature from state-dependent revert", {
+          poolAddress,
+          poolSize,
+          signature,
+          selector: getSelectorForSignature(signature),
+          reason: getErrorMessage(error),
+        });
+        cache.addLiquiditySig = signature;
+        return { callData, signature };
+      }
+      attempted.push(
+        `${signature} [${getSelectorForSignature(signature)}] -> ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Failed to resolve add_liquidity signature for pool ${poolAddress}. Attempted: ${attempted.join(" | ")}`,
+  );
+};
+
+const resolveRemoveOneCoinCallData = async (params: {
+  poolAddress: string;
+  poolSize: number;
+  burnAmount: string;
+  usdcIndex: number;
+  minReceived: string;
+  walletAddress: string;
+  provider: ethers.JsonRpcProvider;
+}) => {
+  const {
+    poolAddress,
+    poolSize,
+    burnAmount,
+    usdcIndex,
+    minReceived,
+    walletAddress,
+    provider,
+  } = params;
+
+  const cache = getCurveMethodCacheEntry(poolAddress, poolSize);
+  const signatures = prioritizeCachedSignature(
+    cache.removeOneCoinSig,
+    getRemoveOneCoinCandidates(),
+  );
+  const attempted: string[] = [];
+
+  for (const signature of signatures) {
+    try {
+      const args = buildRemoveOneCoinArgs({
+        signature,
+        burnAmount,
+        usdcIndex,
+        minReceived,
+        walletAddress,
+      });
+      const callData = curvePoolIface.encodeFunctionData(signature, args);
+      await provider.call({
+        from: walletAddress,
+        to: poolAddress,
+        data: callData,
+      });
+      if (cache.removeOneCoinSig !== signature) {
+        console.info("[liquidity] selected remove_liquidity_one_coin signature", {
+          poolAddress,
+          poolSize,
+          signature,
+          selector: getSelectorForSignature(signature),
+        });
+      }
+      cache.removeOneCoinSig = signature;
+      return { callData, signature };
+    } catch (error) {
+      const args = buildRemoveOneCoinArgs({
+        signature,
+        burnAmount,
+        usdcIndex,
+        minReceived,
+        walletAddress,
+      });
+      const callData = curvePoolIface.encodeFunctionData(signature, args);
+      if (isLikelyStateDependentRevert(error)) {
+        console.info(
+          "[liquidity] selected remove_liquidity_one_coin signature from state-dependent revert",
+          {
+            poolAddress,
+            poolSize,
+            signature,
+            selector: getSelectorForSignature(signature),
+            reason: getErrorMessage(error),
+          },
+        );
+        cache.removeOneCoinSig = signature;
+        return { callData, signature };
+      }
+      attempted.push(
+        `${signature} [${getSelectorForSignature(signature)}] -> ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Failed to resolve remove_liquidity_one_coin signature for pool ${poolAddress}. Attempted: ${attempted.join(" | ")}`,
+  );
+};
+
+const findBurnAmountForUsdc = async (params: {
+  poolAddress: string;
+  provider: ethers.JsonRpcProvider;
+  usdcIndex: number;
+  targetOut: bigint;
+  maxBurn: bigint;
+}) => {
+  const { poolAddress, provider, usdcIndex, targetOut, maxBurn } = params;
+  const pool = new ethers.Contract(poolAddress, curvePoolIface, provider);
+
+  const maxOut = await (pool as any).calc_withdraw_one_coin(maxBurn, usdcIndex);
+  if (maxOut < targetOut) {
+    throw new Error("Insufficient LP balance to cover requested USDC amount.");
+  }
+
+  let low = 0n;
+  let high = maxBurn;
+  let best = maxBurn;
+
+  for (let i = 0; i < 32 && low <= high; i += 1) {
+    const mid = (low + high) / 2n;
+    const out = await (pool as any).calc_withdraw_one_coin(mid, usdcIndex);
+    if (out >= targetOut) {
+      best = mid;
+      if (mid === 0n) break;
+      high = mid - 1n;
+    } else {
+      low = mid + 1n;
+    }
+  }
+
+  return best;
+};
+
+export const quoteUsdcCurveDeposit = async (params: { amount: string }) => {
+  const amountBaseUnits = parseUsdcAmountToBaseUnits(params.amount);
+  const amount = fromBaseUnits(amountBaseUnits, USDC_DECIMALS);
+  await ensureCurvePoolVerified();
+
+  const { poolAddress, lpTokenAddress, usdcIndex, poolSize, slippageBps } =
+    getCurveConfig();
   const provider = getProvider();
+  const amountBaseUnitsString = amountBaseUnits.toString();
+  const amounts = buildAmountsArray(poolSize, usdcIndex, amountBaseUnitsString);
 
-  // Fetch pool price for estimation
-  const pool = new ethers.Contract(config.poolAddress, [
-    "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)"
-  ], provider);
+  const estimatedLp = await estimateLpTokens({ poolAddress, poolSize, amounts, provider });
+  const minMintAmount = applySlippage(estimatedLp, slippageBps);
 
-  const { tick } = await (pool as unknown as { slot0: () => Promise<{ tick: bigint }> }).slot0();
-  
   return {
     amount,
-    rangePreset,
-    token: "USDC",
-    poolAddress: config.poolAddress,
-    currentTick: Number(tick),
-    fee: config.fee,
+    poolAddress,
+    lpTokenAddress,
+    usdcIndex,
+    poolSize,
+    estimatedLpTokens: estimatedLp.toString(),
+    minMintAmount: minMintAmount.toString(),
+    slippageBps,
   };
 };
 
-export const createUsdcPosition = async (params: {
-  uid: string;
-  amount: string;
-  rangePreset: "narrow" | "balanced" | "wide";
-}) => {
-  const { uid, amount, rangePreset } = params;
-  const config = getLiquidityConfig();
+export const depositUsdcToCurve = async (params: { uid: string; amount: string }) => {
+  const { uid } = params;
+  const amountBaseUnits = parseUsdcAmountToBaseUnits(params.amount);
+  const amount = fromBaseUnits(amountBaseUnits, USDC_DECIMALS);
+  await ensureCurvePoolVerified();
+
+  const { poolAddress, lpTokenAddress, usdcIndex, poolSize, slippageBps } =
+    getCurveConfig();
   const provider = getProvider();
 
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletId =
-    userSnap.data()?.circle?.walletsByChain?.[BASE_DESTINATION_CHAIN]?.walletId;
-  const userAddress =
-    userSnap.data()?.circle?.walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
+  const { walletId, address: walletAddress } = await getUserHubWallet(uid);
+  const usdcToken = new ethers.Contract(
+    USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN],
+    erc20ReadAbi,
+    provider,
+  ) as unknown as {
+    balanceOf: (owner: string) => Promise<bigint>;
+  };
 
-  if (!walletId || !userAddress) throw new Error("Missing user wallet ID for hub chain.");
-  if (!config.positionManagerAddress || config.positionManagerAddress === ethers.ZeroAddress) {
-    throw new Error("Missing Uniswap V3 position manager address.");
+  const usdcBalance = await usdcToken.balanceOf(walletAddress);
+  if (usdcBalance < amountBaseUnits) {
+    throw new Error(
+      `Insufficient USDC balance on ${HUB_DESTINATION_CHAIN}. Required ${amount}, available ${fromBaseUnits(
+        usdcBalance,
+        USDC_DECIMALS,
+      )}.`,
+    );
   }
 
-  console.log("[liquidity] create position", {
+  const amountBaseUnitsString = amountBaseUnits.toString();
+  const amounts = buildAmountsArray(poolSize, usdcIndex, amountBaseUnitsString);
+
+  console.log("[liquidity] curve deposit", {
     uid,
     amount,
-    rangePreset,
-    hubChain: BASE_DESTINATION_CHAIN,
-    poolAddress: config.poolAddress,
-    token0: config.token0,
-    token1: config.token1,
-    fee: config.fee,
+    hubChain: HUB_DESTINATION_CHAIN,
+    poolAddress,
+    usdcIndex,
   });
 
-  const pool = new ethers.Contract(config.poolAddress, poolIface, provider) as unknown as {
-    slot0: () => Promise<{ tick: bigint }>;
-    tickSpacing: () => Promise<bigint>;
-  };
-  const [slot0, tickSpacingRaw] = await Promise.all([pool.slot0(), pool.tickSpacing()]);
-  const tickSpacing = Number(tickSpacingRaw);
-  let { tickLower, tickUpper } = getTickRange({
-    tick: Number(slot0.tick),
-    tickSpacing,
-    preset: rangePreset,
-  });
-
-  const amountBaseUnits = toBaseUnits(amount, USDC_DECIMALS).toString();
-  const token0IsUsdc = config.token0.toLowerCase() ===
-    USDC_TOKEN_ADDRESS_BY_CHAIN[BASE_DESTINATION_CHAIN].toLowerCase();
-  const amount0Desired = token0IsUsdc ? amountBaseUnits : "0";
-  const amount1Desired = token0IsUsdc ? "0" : amountBaseUnits;
-
-  if (amount0Desired !== "0" && amount1Desired === "0") {
-    const width = Math.max(tickUpper - tickLower, tickSpacing * 6);
-    tickLower = Math.ceil((Number(slot0.tick) + tickSpacing) / tickSpacing) * tickSpacing;
-    tickUpper = tickLower + width;
-    console.info("[liquidity] single-sided range (token0)", {
-      tickLower,
-      tickUpper,
-    });
-  }
-
-  if (amount1Desired !== "0" && amount0Desired === "0") {
-    const width = Math.max(tickUpper - tickLower, tickSpacing * 6);
-    tickUpper = Math.floor((Number(slot0.tick) - tickSpacing) / tickSpacing) * tickSpacing;
-    tickLower = tickUpper - width;
-    console.info("[liquidity] single-sided range (token1)", {
-      tickLower,
-      tickUpper,
-    });
-  }
-
-  console.info("[liquidity] pool state", {
-    poolAddress: config.poolAddress,
-    tick: Number(slot0.tick),
-    tickSpacing,
-    tickLower,
-    tickUpper,
-    token0IsUsdc,
-    fee: config.fee,
-  });
-
-  const tokenToApprove = token0IsUsdc ? config.token0 : config.token1;
-  const tokenContract = new ethers.Contract(tokenToApprove, erc20ReadAbi, provider) as unknown as {
-    balanceOf: (owner: string) => Promise<bigint>;
-    allowance: (owner: string, spender: string) => Promise<bigint>;
-    symbol: () => Promise<string>;
-    decimals: () => Promise<number>;
-  };
-
-  const [balanceRaw, allowanceRaw, tokenSymbol, tokenDecimals] = await Promise.all([
-    tokenContract.balanceOf(userAddress),
-    tokenContract.allowance(userAddress, config.positionManagerAddress),
-    tokenContract.symbol(),
-    tokenContract.decimals(),
-  ]);
-
-  console.info("[liquidity] token checks", {
-    token: tokenToApprove,
-    symbol: tokenSymbol,
-    decimals: tokenDecimals,
-    balance: balanceRaw.toString(),
-    allowance: allowanceRaw.toString(),
-    amountBaseUnits,
-  });
+  const estimatedLp = await estimateLpTokens({ poolAddress, poolSize, amounts, provider });
+  const minMintAmount = applySlippage(estimatedLp, slippageBps);
 
   const approveData = erc20Iface.encodeFunctionData("approve", [
-    config.positionManagerAddress,
-    amountBaseUnits,
+    poolAddress,
+    amountBaseUnitsString,
   ]);
 
   const approvalCircleTxId = await submitCircleContractExecution({
     walletId,
-    contractAddress: token0IsUsdc ? config.token0 : config.token1,
+    contractAddress: USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN],
     callData: approveData,
     refId: `liquidity-approve:${uid}:${Date.now()}`,
   });
@@ -306,431 +844,245 @@ export const createUsdcPosition = async (params: {
     label: "liquidity-approve",
   });
 
-  const deadline = Math.floor(Date.now() / 1000) + DEFAULT_DEADLINE_SECONDS;
-  const mintParams = {
-    token0: config.token0,
-    token1: config.token1,
-    fee: config.fee,
-    tickLower,
-    tickUpper,
-    amount0Desired,
-    amount1Desired,
-    amount0Min: "0",
-    amount1Min: "0",
-    recipient: userAddress,
-    deadline,
-  };
-
-  console.info("[liquidity] mint params", {
-    token0: mintParams.token0,
-    token1: mintParams.token1,
-    fee: mintParams.fee,
-    tickLower: mintParams.tickLower,
-    tickUpper: mintParams.tickUpper,
-    amount0Desired: mintParams.amount0Desired,
-    amount1Desired: mintParams.amount1Desired,
-    amount0Min: mintParams.amount0Min,
-    amount1Min: mintParams.amount1Min,
-    recipient: mintParams.recipient,
-    deadline: mintParams.deadline,
-  });
-
-  const mintCallData = positionManagerIface.encodeFunctionData("mint", [mintParams]);
-  const mintCircleTxId = await submitCircleContractExecution({
-    walletId,
-    contractAddress: config.positionManagerAddress,
-    callData: mintCallData,
-    refId: `liquidity-mint:${uid}:${Date.now()}`,
-  });
-
-  console.log("[liquidity] submitted txs", {
-    uid,
-    approvalCircleTxId,
-    mintCircleTxId,
-  });
-  
-  const ref = await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .add({
-      amount,
-      rangePreset,
-      token: "USDC",
-      hubChain: BASE_DESTINATION_CHAIN,
-      poolAddress: config.poolAddress,
-      token0: config.token0,
-      token1: config.token1,
-      fee: config.fee,
-      status: "PENDING_ONCHAIN",
-      approvalCircleTxId,
-      mintCircleTxId,
-      tickLower,
-      tickUpper,
-      amountBaseUnits,
-      recipient: userAddress,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+  const { callData: addLiquidityCallData, signature: addLiquiditySignature } =
+    await resolveAddLiquidityCallData({
+      poolAddress,
+      poolSize,
+      amounts,
+      minMintAmount: minMintAmount.toString(),
+      walletAddress,
+      provider,
     });
 
-  await upsertTransaction(uid, `earn:${ref.id}`, {
+  const depositCircleTxId = await submitCircleContractExecution({
+    walletId,
+    contractAddress: poolAddress,
+    callData: addLiquidityCallData,
+    refId: `liquidity-deposit:${uid}:${Date.now()}`,
+  });
+
+  const positionRef = getCurvePositionRef(uid);
+  const positionSnap = await positionRef.get();
+  await positionRef.set(
+    {
+      amount,
+      amountBaseUnits: amountBaseUnitsString,
+      poolAddress,
+      lpTokenAddress,
+      usdcIndex,
+      poolSize,
+      status: "PENDING_ONCHAIN",
+      lastDepositTxId: depositCircleTxId,
+      lastDepositAmount: amount,
+      lastDepositAmountBaseUnits: amountBaseUnitsString,
+      estimatedLpTokens: estimatedLp.toString(),
+      minMintAmount: minMintAmount.toString(),
+      hubChain: HUB_DESTINATION_CHAIN,
+      updatedAt: serverTimestamp(),
+      ...(positionSnap.exists ? {} : { createdAt: serverTimestamp() }),
+    },
+    { merge: true },
+  );
+
+  await upsertTransaction(uid, `earn:curve:deposit:${depositCircleTxId}`, {
     kind: "EARN",
     status: "PENDING",
     amount,
     symbol: "USDC",
-    blockchain: BASE_DESTINATION_CHAIN,
-    relatedTxId: mintCircleTxId,
+    blockchain: HUB_DESTINATION_CHAIN,
+    relatedTxId: depositCircleTxId,
     metadata: {
       action: "ADD_LIQUIDITY",
-      positionId: ref.id,
-      approvalCircleTxId,
-      mintCircleTxId,
-      rangePreset,
-      poolAddress: config.poolAddress,
+      poolAddress,
+      lpTokenAddress,
+      usdcIndex,
+      addLiquiditySignature,
     },
   });
 
-  return { id: ref.id, approvalCircleTxId, mintCircleTxId };
+  return { approvalCircleTxId, depositCircleTxId };
 };
 
-export const listPositionsForUser = async (uid: string) => {
-  const snap = await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .orderBy("createdAt", "desc")
-    .get();
+export const refreshCurvePositionForUser = async (uid: string) => {
+  await ensureCurvePoolVerified();
 
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-};
-
-export const collectPositionFees = async (params: {
-  uid: string;
-  positionId: string;
-}) => {
-  const { uid, positionId } = params;
-  console.log("[liquidity] collect fees", { uid, positionId });
-
-  const config = getLiquidityConfig();
-  if (!config.positionManagerAddress || config.positionManagerAddress === ethers.ZeroAddress) {
-    throw new Error("Missing Uniswap V3 position manager address.");
-  }
-
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletId =
-    userSnap.data()?.circle?.walletsByChain?.[BASE_DESTINATION_CHAIN]?.walletId;
-  const userAddress =
-    userSnap.data()?.circle?.walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
-  if (!walletId || !userAddress) throw new Error("Missing user wallet ID for hub chain.");
-
-  const positionSnap = await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .doc(positionId)
-    .get();
-
-  const tokenId = positionSnap.data()?.tokenId as string | number | undefined;
-  if (!tokenId) {
-    throw new Error("Missing tokenId for position. Mint must succeed first.");
-  }
-
-  const collectParams = {
-    tokenId,
-    recipient: userAddress,
-    amount0Max: MAX_UINT128,
-    amount1Max: MAX_UINT128,
-  };
-
-  const collectCallData = positionManagerIface.encodeFunctionData("collect", [collectParams]);
-  const collectCircleTxId = await submitCircleContractExecution({
-    walletId,
-    contractAddress: config.positionManagerAddress,
-    callData: collectCallData,
-    refId: `liquidity-collect:${uid}:${positionId}:${Date.now()}`,
-  });
-
-  await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .doc(positionId)
-    .set(
-      {
-        lastCollectAt: serverTimestamp(),
-        collectCircleTxId,
-        status: "COLLECT_PENDING",
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
-
-  await upsertTransaction(uid, `earn:${positionId}:collect`, {
-    kind: "EARN",
-    status: "PENDING",
-    amount: "0",
-    symbol: "USDC",
-    blockchain: BASE_DESTINATION_CHAIN,
-    relatedTxId: collectCircleTxId,
-    metadata: {
-      action: "COLLECT_FEES",
-      positionId,
-      collectCircleTxId,
-    },
-  });
-
-  return { id: positionId, collectCircleTxId };
-};
-
-export const withdrawPosition = async (params: {
-  uid: string;
-  positionId: string;
-}) => {
-  const { uid, positionId } = params;
-  console.log("[liquidity] withdraw position", { uid, positionId });
-
-  const config = getLiquidityConfig();
+  const { poolAddress, lpTokenAddress, usdcIndex, poolSize } = getCurveConfig();
   const provider = getProvider();
-  if (!config.positionManagerAddress || config.positionManagerAddress === ethers.ZeroAddress) {
-    throw new Error("Missing Uniswap V3 position manager address.");
-  }
+  const { address } = await getUserHubWallet(uid);
 
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletId =
-    userSnap.data()?.circle?.walletsByChain?.[BASE_DESTINATION_CHAIN]?.walletId;
-  const userAddress =
-    userSnap.data()?.circle?.walletsByChain?.[BASE_DESTINATION_CHAIN]?.address;
-  if (!walletId || !userAddress) throw new Error("Missing user wallet ID for hub chain.");
-
-  const positionSnap = await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .doc(positionId)
-    .get();
-
-  const tokenId = positionSnap.data()?.tokenId as string | number | undefined;
-  if (!tokenId) {
-    throw new Error("Missing tokenId for position. Mint must succeed first.");
-  }
-
-  const positionManager = new ethers.Contract(
-    config.positionManagerAddress,
-    positionManagerIface,
-    provider,
-  ) as unknown as {
-    positions: (tokenId: string | number) => Promise<{ liquidity: bigint }>;
+  const lpToken = new ethers.Contract(lpTokenAddress, erc20ReadAbi, provider) as unknown as {
+    balanceOf: (owner: string) => Promise<bigint>;
+    decimals: () => Promise<number>;
   };
 
-  const position = await positionManager.positions(tokenId);
-  const liquidity = position?.liquidity as bigint | undefined;
-  if (!liquidity || liquidity === 0n) {
-    throw new Error("Position has zero liquidity.");
-  }
-
-  const deadline = Math.floor(Date.now() / 1000) + DEFAULT_DEADLINE_SECONDS;
-  const decreaseParams = {
-    tokenId,
-    liquidity,
-    amount0Min: "0",
-    amount1Min: "0",
-    deadline,
-  };
-
-  const decreaseCallData = positionManagerIface.encodeFunctionData("decreaseLiquidity", [
-    decreaseParams,
+  const [lpBalance, lpDecimals] = await Promise.all([
+    lpToken.balanceOf(address),
+    lpToken.decimals(),
   ]);
-  const decreaseCircleTxId = await submitCircleContractExecution({
-    walletId,
-    contractAddress: config.positionManagerAddress,
-    callData: decreaseCallData,
-    refId: `liquidity-decrease:${uid}:${positionId}:${Date.now()}`,
-  });
 
-  await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .doc(positionId)
-    .set(
-      {
-        status: "WITHDRAW_PENDING",
-        decreaseCircleTxId,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
-
-  await upsertTransaction(uid, `earn:${positionId}:withdraw`, {
-    kind: "EARN",
-    status: "PENDING",
-    amount: "0",
-    symbol: "USDC",
-    blockchain: BASE_DESTINATION_CHAIN,
-    relatedTxId: decreaseCircleTxId,
-    metadata: {
-      action: "WITHDRAW_LIQUIDITY",
-      positionId,
-      decreaseCircleTxId,
-    },
-  });
-
-  return { id: positionId, decreaseCircleTxId };
-};
-
-export const getPositionStatus = async (params: { uid: string; positionId: string }) => {
-  const { uid, positionId } = params;
-  const circle = getCircleClient();
-
-  const positionRef = firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .doc(positionId);
-
-  const snap = await positionRef.get();
-  if (!snap.exists) {
-    throw new Error("Position not found.");
-  }
-
-  const data = snap.data() ?? {};
-  const approvalCircleTxId = data.approvalCircleTxId as string | undefined;
-  const mintCircleTxId = data.mintCircleTxId as string | undefined;
-  const collectCircleTxId = data.collectCircleTxId as string | undefined;
-  const decreaseCircleTxId = data.decreaseCircleTxId as string | undefined;
-
-  const fetchState = async (id?: string) => {
-    if (!id) return null;
-    const txResp = await (circle as any).getTransaction({ id });
-    const tx = txResp?.data?.transaction as any;
-    return {
-      id,
-      state: (tx?.state as string | undefined) ?? null,
-      txHash: (tx?.txHash as string | undefined) ?? null,
-      error: (tx?.errorReason as string | undefined) ?? (tx?.error as string | undefined) ?? null,
+  let usdcValueBaseUnits = 0n;
+  if (lpBalance > 0n) {
+    const pool = new ethers.Contract(poolAddress, curvePoolIface, provider) as unknown as {
+      calc_withdraw_one_coin: (burnAmount: bigint, i: number) => Promise<bigint>;
     };
-  };
+    usdcValueBaseUnits = await pool.calc_withdraw_one_coin(lpBalance, usdcIndex);
+  }
 
-  const [approval, mint, collect, decrease] = await Promise.all([
-    fetchState(approvalCircleTxId),
-    fetchState(mintCircleTxId),
-    fetchState(collectCircleTxId),
-    fetchState(decreaseCircleTxId),
-  ]);
+  const usdcValue = fromBaseUnits(usdcValueBaseUnits, USDC_DECIMALS);
+  const status = lpBalance > 0n ? "ACTIVE" : "EMPTY";
 
+  const positionRef = getCurvePositionRef(uid);
   await positionRef.set(
     {
-      lastCircleTxState: {
-        approval: approval?.state ?? null,
-        mint: mint?.state ?? null,
-        collect: collect?.state ?? null,
-        decrease: decrease?.state ?? null,
-      },
+      poolAddress,
+      lpTokenAddress,
+      usdcIndex,
+      poolSize,
+      lpBalance: lpBalance.toString(),
+      lpDecimals,
+      usdcValue,
+      usdcValueBaseUnits: usdcValueBaseUnits.toString(),
+      status,
+      hubChain: HUB_DESTINATION_CHAIN,
       updatedAt: serverTimestamp(),
     },
     { merge: true },
   );
 
-  if (mint?.id) {
-    await upsertTransaction(uid, `earn:${positionId}`, {
-      kind: "EARN",
-      status: toUnifiedStatus(mint.state),
-      amount: data.amount ?? "0",
-      symbol: "USDC",
-      blockchain: BASE_DESTINATION_CHAIN,
-      relatedTxId: mint.id,
-      txHash: mint.txHash ?? null,
-      metadata: {
-        action: "ADD_LIQUIDITY",
-        positionId,
-      },
-    });
-  }
-
-  if (collect?.id) {
-    await upsertTransaction(uid, `earn:${positionId}:collect`, {
-      kind: "EARN",
-      status: toUnifiedStatus(collect.state),
-      amount: "0",
-      symbol: "USDC",
-      blockchain: BASE_DESTINATION_CHAIN,
-      relatedTxId: collect.id,
-      txHash: collect.txHash ?? null,
-      metadata: {
-        action: "COLLECT_FEES",
-        positionId,
-      },
-    });
-  }
-
-  if (decrease?.id) {
-    await upsertTransaction(uid, `earn:${positionId}:withdraw`, {
-      kind: "EARN",
-      status: toUnifiedStatus(decrease.state),
-      amount: "0",
-      symbol: "USDC",
-      blockchain: BASE_DESTINATION_CHAIN,
-      relatedTxId: decrease.id,
-      txHash: decrease.txHash ?? null,
-      metadata: {
-        action: "WITHDRAW_LIQUIDITY",
-        positionId,
-      },
-    });
-  }
-
-  return { approval, mint, collect, decrease, tokenId: data.tokenId ?? null };
+  const snap = await positionRef.get();
+  return snap.exists ? ({ id: snap.id, ...snap.data() } as any) : null;
 };
 
-export const listPositionsStatusForUser = async (uid: string) => {
-  const circle = getCircleClient();
+export const getCurvePositionForUser = async (uid: string) => {
+  try {
+    return await refreshCurvePositionForUser(uid);
+  } catch (error) {
+    console.warn("[liquidity] failed to refresh curve position", {
+      uid,
+      error: (error as Error)?.message,
+    });
 
-  const snap = await firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("positions")
-    .orderBy("createdAt", "desc")
-    .get();
+    const snap = await getCurvePositionRef(uid).get();
+    return snap.exists ? ({ id: snap.id, ...snap.data() } as any) : null;
+  }
+};
 
-  const fetchState = async (id?: string) => {
-    if (!id) return null;
-    const txResp = await (circle as any).getTransaction({ id });
-    const tx = txResp?.data?.transaction as any;
-    return {
-      id,
-      state: (tx?.state as string | undefined) ?? null,
-      txHash: (tx?.txHash as string | undefined) ?? null,
-      error: (tx?.errorReason as string | undefined) ?? (tx?.error as string | undefined) ?? null,
-    };
+export const withdrawUsdcFromCurve = async (params: { uid: string; amount: string }) => {
+  const { uid } = params;
+  const amountBaseUnits = parseUsdcAmountToBaseUnits(params.amount);
+  const amount = fromBaseUnits(amountBaseUnits, USDC_DECIMALS);
+  await ensureCurvePoolVerified();
+
+  const { poolAddress, lpTokenAddress, usdcIndex, poolSize, slippageBps } =
+    getCurveConfig();
+  const provider = getProvider();
+  const { walletId, address } = await getUserHubWallet(uid);
+
+  const lpToken = new ethers.Contract(lpTokenAddress, erc20ReadAbi, provider) as unknown as {
+    balanceOf: (owner: string) => Promise<bigint>;
+    allowance: (owner: string, spender: string) => Promise<bigint>;
+    decimals: () => Promise<number>;
   };
 
-  const results = await Promise.all(
-    snap.docs.map(async (doc) => {
-      const data = doc.data();
-      const approvalCircleTxId = data.approvalCircleTxId as string | undefined;
-      const mintCircleTxId = data.mintCircleTxId as string | undefined;
-      const collectCircleTxId = data.collectCircleTxId as string | undefined;
-      const decreaseCircleTxId = data.decreaseCircleTxId as string | undefined;
+  const [lpBalance, lpAllowance, lpDecimals] = await Promise.all([
+    lpToken.balanceOf(address),
+    lpToken.allowance(address, poolAddress),
+    lpToken.decimals(),
+  ]);
 
-      const [approval, mint, collect, decrease] = await Promise.all([
-        fetchState(approvalCircleTxId),
-        fetchState(mintCircleTxId),
-        fetchState(collectCircleTxId),
-        fetchState(decreaseCircleTxId),
-      ]);
+  if (lpBalance <= 0n) {
+    throw new Error("No Curve LP balance available to withdraw.");
+  }
 
-      return {
-        id: doc.id,
-        tokenId: data.tokenId ?? null,
-        status: data.status ?? null,
-        approval,
-        mint,
-        collect,
-        decrease,
-        createdAt: data.createdAt ?? null,
-      };
-    }),
+  const burnAmount = await findBurnAmountForUsdc({
+    poolAddress,
+    provider,
+    usdcIndex,
+    targetOut: amountBaseUnits,
+    maxBurn: lpBalance,
+  });
+  if (burnAmount === 0n) {
+    throw new Error("Withdraw amount is too small for the current pool state.");
+  }
+
+  const minReceived = applySlippage(amountBaseUnits, slippageBps);
+
+  let approvalCircleTxId: string | null = null;
+  if (lpAllowance < burnAmount) {
+    const approveLpData = erc20Iface.encodeFunctionData("approve", [
+      poolAddress,
+      burnAmount.toString(),
+    ]);
+
+    approvalCircleTxId = await submitCircleContractExecution({
+      walletId,
+      contractAddress: lpTokenAddress,
+      callData: approveLpData,
+      refId: `liquidity-approve-lp:${uid}:${Date.now()}`,
+    });
+
+    await waitForCircleTxCompletion({
+      txId: approvalCircleTxId,
+      label: "liquidity-approve-lp",
+    });
+  }
+
+  const { callData: withdrawCallData, signature: removeOneCoinSignature } =
+    await resolveRemoveOneCoinCallData({
+      poolAddress,
+      poolSize,
+      burnAmount: burnAmount.toString(),
+      usdcIndex,
+      minReceived: minReceived.toString(),
+      walletAddress: address,
+      provider,
+    });
+
+  const withdrawCircleTxId = await submitCircleContractExecution({
+    walletId,
+    contractAddress: poolAddress,
+    callData: withdrawCallData,
+    refId: `liquidity-withdraw:${uid}:${Date.now()}`,
+  });
+
+  const positionRef = getCurvePositionRef(uid);
+  const positionSnap = await positionRef.get();
+  await positionRef.set(
+    {
+      poolAddress,
+      lpTokenAddress,
+      usdcIndex,
+      poolSize,
+      status: "WITHDRAW_PENDING",
+      lastWithdrawTxId: withdrawCircleTxId,
+      lastWithdrawAmount: amount,
+      lastWithdrawAmountBaseUnits: amountBaseUnits.toString(),
+      lastWithdrawBurnAmount: burnAmount.toString(),
+      lpBalance: lpBalance.toString(),
+      lpDecimals,
+      hubChain: HUB_DESTINATION_CHAIN,
+      updatedAt: serverTimestamp(),
+      ...(positionSnap.exists ? {} : { createdAt: serverTimestamp() }),
+    },
+    { merge: true },
   );
 
-  return results;
+  await upsertTransaction(uid, `earn:curve:withdraw:${withdrawCircleTxId}`, {
+    kind: "EARN",
+    status: "PENDING",
+    amount,
+    symbol: "USDC",
+    blockchain: HUB_DESTINATION_CHAIN,
+    relatedTxId: withdrawCircleTxId,
+    metadata: {
+      action: "WITHDRAW_LIQUIDITY",
+      poolAddress,
+      lpTokenAddress,
+      burnAmount: burnAmount.toString(),
+      usdcIndex,
+      removeOneCoinSignature,
+    },
+  });
+
+  return { withdrawCircleTxId, approvalCircleTxId };
 };

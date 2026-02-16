@@ -8,6 +8,7 @@ import { lifiGetRoutes, lifiGetStepTransaction } from "../lib/lifiClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { upsertTransaction } from "../lib/transactions.js";
 import { formatDecimalFromBaseUnits, parseBigintMaybeHex } from "../lib/units.js";
+import { config } from "../config.js";
 import {
   SUPPORTED_EVM_CHAINS,
   SUPPORTED_SOL_CHAINS,
@@ -114,6 +115,14 @@ const getUserEvmAddress = async (uid: string) => {
   const addr = circle?.evmAddress ?? null;
   if (!addr) throw new Error("Missing user EVM address.");
   return addr;
+};
+
+const normalizeAddress = (value?: string | null) => (value ?? "").toLowerCase();
+
+const isLpTokenAddress = (tokenAddress?: string | null) => {
+  const lpAddress = normalizeAddress(config.CURVE_LP_TOKEN_ADDRESS);
+  if (!lpAddress) return false;
+  return normalizeAddress(tokenAddress) === lpAddress;
 };
 
 const tryLockJob = async (jobRef: admin.firestore.DocumentReference) => {
@@ -234,6 +243,15 @@ export const enqueueSameChainSwapToUsdc = async (input: {
   if (!isSupportedEvmCircleChain(input.blockchain)) return { enqueued: false };
   if (!input.tokenAddress) return { enqueued: false };
   if (input.tokenSymbol?.toUpperCase() === "USDC") return { enqueued: false };
+  if (isLpTokenAddress(input.tokenAddress)) {
+    console.log("[swap] Skipping auto-swap for LP token", {
+      depositTxId: input.depositTxId,
+      blockchain: input.blockchain,
+      tokenAddress: input.tokenAddress,
+      tokenSymbol: input.tokenSymbol,
+    });
+    return { enqueued: false };
+  }
 
   const fromTokenAddress = input.tokenAddress;
 

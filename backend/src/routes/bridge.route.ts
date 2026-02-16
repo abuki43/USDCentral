@@ -7,13 +7,13 @@ import { getCircleClient } from "../lib/circleClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { upsertTransaction } from "../lib/transactions.js";
 import {
-  BASE_DESTINATION_CHAIN,
+  HUB_DESTINATION_CHAIN,
   type SupportedChain,
   USDC_TOKEN_ADDRESS_BY_CHAIN,
 } from "../lib/usdcAddresses.js";
 import {
-  bridgeUsdcFromBaseForUser,
-  estimateBridgeUsdcFromBaseForUser,
+  bridgeUsdcFromHubForUser,
+  estimateBridgeUsdcFromHubForUser,
 } from "../services/bridge.service.js";
 import { recomputeUnifiedUsdcBalance } from "../services/circle.service.js";
 
@@ -34,7 +34,7 @@ const sanitizeForFirestore = (value: unknown) =>
     }),
   );
 
-router.post("/estimate", requireAuth, validateBody(bridgeEstimateSchema), async (req, res) => {
+router.post("/estimate", requireAuth, validateBody(bridgeEstimateSchema), async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
     const { destinationChain, recipientAddress, amount } = req.validatedBody as {
@@ -43,11 +43,11 @@ router.post("/estimate", requireAuth, validateBody(bridgeEstimateSchema), async 
       amount: string;
     };
 
-    if (destinationChain === BASE_DESTINATION_CHAIN) {
+    if (destinationChain === HUB_DESTINATION_CHAIN) {
       return res.json({ estimate: null, fees: [] });
     }
 
-    const estimate = await estimateBridgeUsdcFromBaseForUser({
+    const estimate = await estimateBridgeUsdcFromHubForUser({
       uid: user.uid,
       destinationChain,
       amount,
@@ -62,12 +62,11 @@ router.post("/estimate", requireAuth, validateBody(bridgeEstimateSchema), async 
 
     return res.json({ estimate: safeEstimate });
   } catch (error) {
-    console.error("Estimate failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 
-router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async (req, res) => {
+router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async (req, res, next) => {
   try {
     const { user } = req as AuthenticatedRequest;
     const { destinationChain, recipientAddress, amount } = req.validatedBody as {
@@ -82,16 +81,16 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
       { walletId?: string; address?: string }
     >;
 
-    if (destinationChain === BASE_DESTINATION_CHAIN) {
-      const baseWalletId = walletsByChain[BASE_DESTINATION_CHAIN]?.walletId;
-      if (!baseWalletId) {
-        return res.status(400).json({ message: "Missing Base wallet for user." });
+    if (destinationChain === HUB_DESTINATION_CHAIN) {
+      const hubWalletId = walletsByChain[HUB_DESTINATION_CHAIN]?.walletId;
+      if (!hubWalletId) {
+      return res.status(400).json({ message: "Missing hub wallet for user." });
       }
 
       const circle = getCircleClient();
-      const usdcTokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[BASE_DESTINATION_CHAIN];
+      const usdcTokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN];
       const balances = await circle.getWalletTokenBalance({
-        id: baseWalletId,
+        id: hubWalletId,
         tokenAddresses: [usdcTokenAddress],
         includeAll: true,
       });
@@ -103,12 +102,12 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
 
       const tokenId = tokenBalance?.token?.id as string | undefined;
       if (!tokenId) {
-        return res.status(400).json({ message: "USDC tokenId not found for Base wallet." });
+        return res.status(400).json({ message: "USDC tokenId not found for hub wallet." });
       }
 
       const refId = `withdraw:${user.uid}:${Date.now()}`;
       const transfer = await circle.createTransaction({
-        walletId: baseWalletId,
+        walletId: hubWalletId,
         tokenId,
         destinationAddress: recipientAddress,
         amounts: [amount],
@@ -124,7 +123,7 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
         status: "PENDING",
         amount,
         symbol: "USDC",
-        blockchain: BASE_DESTINATION_CHAIN,
+        blockchain: HUB_DESTINATION_CHAIN,
         relatedTxId: transferId ?? null,
         metadata: {
           destinationChain,
@@ -156,8 +155,8 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
       status: "BRIDGING",
       amount,
       symbol: "USDC",
-      blockchain: BASE_DESTINATION_CHAIN,
-      sourceChain: BASE_DESTINATION_CHAIN,
+      blockchain: HUB_DESTINATION_CHAIN,
+      sourceChain: HUB_DESTINATION_CHAIN,
       destinationChain,
       metadata: {
         recipientAddress,
@@ -167,7 +166,7 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
 
     let result: unknown;
     try {
-      result = await bridgeUsdcFromBaseForUser({
+      result = await bridgeUsdcFromHubForUser({
         uid: user.uid,
         destinationChain,
         amount,
@@ -179,8 +178,8 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
         status: "FAILED",
         amount,
         symbol: "USDC",
-        blockchain: BASE_DESTINATION_CHAIN,
-        sourceChain: BASE_DESTINATION_CHAIN,
+        blockchain: HUB_DESTINATION_CHAIN,
+        sourceChain: HUB_DESTINATION_CHAIN,
         destinationChain,
         metadata: {
           recipientAddress,
@@ -211,8 +210,8 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
       status: "COMPLETED",
       amount,
       symbol: "USDC",
-      blockchain: BASE_DESTINATION_CHAIN,
-      sourceChain: BASE_DESTINATION_CHAIN,
+      blockchain: HUB_DESTINATION_CHAIN,
+      sourceChain: HUB_DESTINATION_CHAIN,
       destinationChain,
       metadata: {
         recipientAddress,
@@ -225,8 +224,7 @@ router.post("/withdraw", requireAuth, validateBody(bridgeWithdrawSchema), async 
 
     return res.json({ result: safeResult });
   } catch (error) {
-    console.error("Withdraw failed:", error);
-    return res.status(500).json({ message: (error as Error).message });
+    return next(error);
   }
 });
 
