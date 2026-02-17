@@ -12,7 +12,7 @@ const router = Router();
 
 router.post("/provision", requireAuth, async (req, res, next) => {
   try {
-    console.log("Provisioning circle wallets");
+    req.log?.info("Provisioning circle wallets");
     const { user } = req as AuthenticatedRequest;
     const circle = await provisionCircleWalletsForUser(user.uid);
     const balance = await recomputeUnifiedUsdcBalance(user.uid);

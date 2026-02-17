@@ -1,4 +1,4 @@
-import { normalizeSupportedChain, type SupportedChain } from "./usdcAddresses.js";
+import { normalizeSupportedChain, type SupportedChain } from "./chains.js";
 
 type WalletByChainEntry = { walletId?: string; address?: string };
 

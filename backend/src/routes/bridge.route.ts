@@ -6,11 +6,8 @@ import { bridgeEstimateSchema, bridgeWithdrawSchema } from "../schemas/bridge.sc
 import { getCircleClient } from "../lib/circleClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { upsertTransaction } from "../lib/transactions.js";
-import {
-  HUB_DESTINATION_CHAIN,
-  type SupportedChain,
-  USDC_TOKEN_ADDRESS_BY_CHAIN,
-} from "../lib/usdcAddresses.js";
+import { HUB_DESTINATION_CHAIN, type SupportedChain } from "../lib/chains.js";
+import { USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
 import {
   bridgeUsdcFromHubForUser,
   estimateBridgeUsdcFromHubForUser,

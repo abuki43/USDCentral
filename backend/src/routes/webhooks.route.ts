@@ -1,35 +1,26 @@
-import crypto from "crypto";
 import express, { Router } from "express";
 import { getCircleClient } from "../lib/circleClient.js";
 import { resolveUidFromWalletId } from "../services/circle.service.js";
 import { handleCircleWebhookTransaction } from "../services/webhooks.service.js";
+import { logger } from "../lib/logger.js";
+import { verifyCircleWebhookSignature } from "../lib/webhooks.js";
+import { config } from "../config.js";
+import { withRetry } from "../lib/retry.js";
 
 const router = Router();
-
-const publicKeyCache = new Map<string, crypto.KeyObject>();
-
-async function getCachedPublicKey(keyId: string) {
-  const cached = publicKeyCache.get(keyId);
-  if (cached) return cached;
-
-  const circle = getCircleClient();
-  // Circle docs refer to this header as key id; SDK method name uses “subscriptionId”.
-  const resp = await circle.getNotificationSignature(keyId);
-  const publicKeyBase64 = resp.data?.publicKey;
-  if (!publicKeyBase64) {
-    throw new Error("Missing publicKey from Circle.");
+const getWebhookTimestamp = (payload: any) => {
+  const candidates = [
+    payload?.timestamp,
+    payload?.notification?.timestamp,
+    payload?.notification?.createdAt,
+  ];
+  for (const value of candidates) {
+    if (!value) continue;
+    const ts = Date.parse(value);
+    if (!Number.isNaN(ts)) return ts;
   }
-
-  const publicKeyBytes = Buffer.from(publicKeyBase64, "base64");
-  const key = crypto.createPublicKey({
-    key: publicKeyBytes,
-    format: "der",
-    type: "spki",
-  });
-
-  publicKeyCache.set(keyId, key);
-  return key;
-}
+  return null;
+};
 
 
 router.post(
@@ -38,7 +29,7 @@ router.post(
   express.raw({ type: "*/*" }),
   async (req, res, next) => {
     try {
-      console.log("Received Circle webhook");
+      req.log?.info("Received Circle webhook");
       const keyId = req.header("X-Circle-Key-Id");
       const signature = req.header("X-Circle-Signature");
       if (!keyId || !signature) {
@@ -46,24 +37,43 @@ router.post(
           .status(400)
           .json({ message: "Missing Circle signature headers." });
       }
-
-      const publicKey = await getCachedPublicKey(keyId);
-      const signatureBytes = Buffer.from(signature, "base64");
       const raw = req.body as Buffer;
 
-      console.log("Verifying webhook signature");
-
-      const valid = crypto.verify("sha256", raw, publicKey, signatureBytes);
+      req.log?.info("Verifying webhook signature");
+      const valid = await verifyCircleWebhookSignature({
+        keyId,
+        signature,
+        payload: raw,
+      });
       if (!valid) {
         return res.status(401).json({ message: "Invalid webhook signature." });
       }
 
       const payload = JSON.parse(raw.toString("utf-8")) as any;
-      console.info("[webhook] notification", {
-        notificationType: payload?.notificationType ?? null,
-        notificationId: payload?.notificationId ?? null,
-        notificationTxId: payload?.notification?.id ?? null,
-      });
+      req.log?.info(
+        {
+          notificationType: payload?.notificationType ?? null,
+          notificationId: payload?.notificationId ?? null,
+          notificationTxId: payload?.notification?.id ?? null,
+        },
+        "[webhook] notification",
+      );
+      if (config.webhookReplayWindowSec > 0) {
+        const ts = getWebhookTimestamp(payload);
+        if (ts) {
+          const ageMs = Date.now() - ts;
+          if (ageMs > config.webhookReplayWindowSec * 1000) {
+            req.log?.warn(
+              {
+                ageMs,
+                windowSec: config.webhookReplayWindowSec,
+              },
+              "Skipping stale webhook",
+            );
+            return res.status(200).json({ ok: true });
+          }
+        }
+      }
       if (!payload?.notificationType?.startsWith("transactions.")) {
         return res.status(200).json({ ok: true });
       }
@@ -74,20 +84,26 @@ router.post(
       }
 
       const circle = getCircleClient();
-      const txResp = await circle.getTransaction({ id: txId });
+      const txResp = await withRetry(
+        () => circle.getTransaction({ id: txId }),
+        { retries: 2 },
+      );
       const tx = txResp.data?.transaction as any;
       if (!tx) {
         return res.status(200).json({ ok: true });
       }
 
-      console.info("[webhook] transaction", {
-        txId: tx.id ?? null,
-        transactionType: tx.transactionType ?? null,
-        state: tx.state ?? null,
-        txHash: tx.txHash ?? null,
-        blockchain: tx.blockchain ?? null,
-        walletId: tx.walletId ?? null,
-      });
+      req.log?.info(
+        {
+          txId: tx.id ?? null,
+          transactionType: tx.transactionType ?? null,
+          state: tx.state ?? null,
+          txHash: tx.txHash ?? null,
+          blockchain: tx.blockchain ?? null,
+          walletId: tx.walletId ?? null,
+        },
+        "[webhook] transaction",
+      );
 
       if (
         tx.transactionType !== "INBOUND" &&
@@ -108,7 +124,7 @@ router.post(
 
       return res.status(200).json({ ok: true });
     } catch (error) {
-      console.error("Error processing Circle webhook:", error);
+      logger.error({ err: error }, "Error processing Circle webhook");
       return next(error);
     }
   },

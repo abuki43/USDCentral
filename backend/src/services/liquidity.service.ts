@@ -2,20 +2,37 @@ import admin from "firebase-admin";
 import crypto from "crypto";
 import { ethers } from "ethers";
 
-import { firestoreAdmin } from "../lib/firebaseAdmin.js";
-import {
-  HUB_DESTINATION_CHAIN,
-  USDC_DECIMALS,
-  USDC_TOKEN_ADDRESS_BY_CHAIN,
-} from "../lib/usdcAddresses.js";
+import { HUB_DESTINATION_CHAIN } from "../lib/chains.js";
+import { USDC_DECIMALS, USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
 import { getWalletByChain } from "../lib/wallets.js";
 import { getCircleClient } from "../lib/circleClient.js";
 import { upsertTransaction } from "../lib/transactions.js";
-import { config } from "../config.js";
+import { logger } from "../lib/logger.js";
+import { withRetry } from "../lib/retry.js";
+import { getCurvePositionRef } from "../repos/positionsRepo.js";
+import { getUserCircleWalletsByChain } from "../repos/usersRepo.js";
+import {
+  curvePoolIface,
+  erc20ReadAbi,
+  ensureCurvePoolVerified,
+  getCurveConfig,
+  getProvider,
+} from "./liquidity/curveConfig.js";
+import {
+  buildAddLiquidityArgs,
+  buildCalcTokenAmountArgs,
+  buildRemoveOneCoinArgs,
+  getAddLiquidityCandidates,
+  getCalcTokenAmountCandidates,
+  getErrorMessage,
+  getRemoveOneCoinCandidates,
+  getSelectorForSignature,
+  isLikelyStateDependentRevert,
+  prioritizeCachedSignature,
+} from "./liquidity/curveSignatures.js";
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 
-const DEFAULT_SLIPPAGE_BPS = 50;
 const USDC_AMOUNT_REGEX = /^\d+(\.\d{1,6})?$/;
 
 const toBaseUnits = (amount: string, decimals: number) => {
@@ -79,116 +96,9 @@ const submitCircleContractExecution = async (params: {
   return txId as string;
 };
 
-type CurveConfig = {
-  poolAddress: string;
-  lpTokenAddress: string;
-  usdcIndex: number;
-  poolSize: number;
-  expectedPairTokenAddress: string;
-  slippageBps: number;
-};
-
-const getCurveConfig = (): CurveConfig => {
-  const poolAddress = config.CURVE_POOL_ADDRESS ?? "";
-  const lpTokenAddress = config.CURVE_LP_TOKEN_ADDRESS ?? "";
-  const usdcIndexRaw = config.CURVE_USDC_INDEX ?? "";
-  const poolSizeRaw = config.CURVE_POOL_SIZE ?? "";
-  const expectedPairTokenAddressRaw = config.CURVE_EXPECTED_PAIR_TOKEN_ADDRESS ?? "";
-  const slippageRaw = config.CURVE_SLIPPAGE_BPS;
-
-  if (
-    !poolAddress ||
-    !lpTokenAddress ||
-    !usdcIndexRaw ||
-    !poolSizeRaw ||
-    !expectedPairTokenAddressRaw
-  ) {
-    throw new Error(
-      "Curve config missing. Set CURVE_POOL_ADDRESS, CURVE_LP_TOKEN_ADDRESS, CURVE_USDC_INDEX, CURVE_POOL_SIZE, CURVE_EXPECTED_PAIR_TOKEN_ADDRESS.",
-    );
-  }
-
-  const usdcIndex = Number(usdcIndexRaw);
-  const poolSize = Number(poolSizeRaw);
-  const expectedPairTokenAddress = expectedPairTokenAddressRaw.toLowerCase();
-  const slippageBps =
-    slippageRaw == null || slippageRaw === ""
-      ? DEFAULT_SLIPPAGE_BPS
-      : Number(slippageRaw);
-
-  if (!Number.isInteger(usdcIndex) || usdcIndex < 0) {
-    throw new Error("CURVE_USDC_INDEX must be a non-negative integer.");
-  }
-  if (!Number.isInteger(poolSize) || poolSize <= 0) {
-    throw new Error("CURVE_POOL_SIZE must be a positive integer.");
-  }
-  if (!ethers.isAddress(expectedPairTokenAddress)) {
-    throw new Error("CURVE_EXPECTED_PAIR_TOKEN_ADDRESS must be a valid EVM address.");
-  }
-  if (
-    expectedPairTokenAddress ===
-    USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN].toLowerCase()
-  ) {
-    throw new Error("CURVE_EXPECTED_PAIR_TOKEN_ADDRESS must not be the USDC address.");
-  }
-  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 500) {
-    throw new Error("CURVE_SLIPPAGE_BPS must be between 0 and 500.");
-  }
-
-  if (poolSize !== 2 && poolSize !== 3) {
-    throw new Error("Only Curve pools with size 2 or 3 are supported right now.");
-  }
-
-  return {
-    poolAddress,
-    lpTokenAddress,
-    usdcIndex,
-    poolSize,
-    expectedPairTokenAddress,
-    slippageBps,
-  };
-};
-
-const getProvider = () => {
-  const url = config.HUB_CHAIN_RPC_URL;
-  if (!url) throw new Error("Missing HUB_CHAIN_RPC_URL");
-  return new ethers.JsonRpcProvider(url);
-};
-
 const erc20Iface = new ethers.Interface([
   "function approve(address spender, uint256 amount) returns (bool)",
 ]);
-
-const erc20ReadAbi = [
-  "function balanceOf(address owner) view returns (uint256)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function symbol() view returns (string)",
-  "function decimals() view returns (uint8)",
-];
-
-const curvePoolIface = new ethers.Interface([
-  "function add_liquidity(uint256[2] amounts, uint256 min_mint_amount)",
-  "function add_liquidity(uint256[3] amounts, uint256 min_mint_amount)",
-  "function add_liquidity(uint256[] amounts, uint256 min_mint_amount)",
-  "function add_liquidity(uint256[2] amounts, uint256 min_mint_amount, address receiver)",
-  "function add_liquidity(uint256[3] amounts, uint256 min_mint_amount, address receiver)",
-  "function add_liquidity(uint256[] amounts, uint256 min_mint_amount, address receiver)",
-  "function remove_liquidity_one_coin(uint256 burn_amount, int128 i, uint256 min_received)",
-  "function remove_liquidity_one_coin(uint256 burn_amount, int128 i, uint256 min_received, address receiver)",
-  "function remove_liquidity_one_coin(uint256 burn_amount, uint256 i, uint256 min_received)",
-  "function remove_liquidity_one_coin(uint256 burn_amount, uint256 i, uint256 min_received, address receiver)",
-  "function calc_withdraw_one_coin(uint256 burn_amount, int128 i) view returns (uint256)",
-  "function calc_token_amount(uint256[2] amounts, bool is_deposit) view returns (uint256)",
-  "function calc_token_amount(uint256[2] amounts) view returns (uint256)",
-  "function calc_token_amount(uint256[3] amounts, bool is_deposit) view returns (uint256)",
-  "function calc_token_amount(uint256[3] amounts) view returns (uint256)",
-  "function calc_token_amount(uint256[] amounts, bool is_deposit) view returns (uint256)",
-  "function calc_token_amount(uint256[] amounts) view returns (uint256)",
-  "function coins(uint256 index) view returns (address)",
-]);
-
-let curveVerificationPromise: Promise<void> | null = null;
-let curveVerified = false;
 
 type CurveMethodCacheEntry = {
   calcTokenAmountSig?: string;
@@ -210,138 +120,6 @@ const getCurveMethodCacheEntry = (poolAddress: string, poolSize: number) => {
   return empty;
 };
 
-const getErrorMessage = (error: unknown) =>
-  (error as any)?.shortMessage ??
-  (error as any)?.reason ??
-  (error as Error)?.message ??
-  "unknown error";
-
-const getSelectorForSignature = (signature: string) => {
-  try {
-    return curvePoolIface.getFunction(signature)?.selector ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-};
-
-const isLikelyNoDataSignatureRevert = (error: unknown) => {
-  const message = `${getErrorMessage(error)} ${(error as any)?.message ?? ""}`.toLowerCase();
-  return (
-    message.includes("no data present") ||
-    message.includes("require(false)") ||
-    message.includes("function selector was not recognized")
-  );
-};
-
-const isLikelyStateDependentRevert = (error: unknown) => {
-  const message = `${getErrorMessage(error)} ${(error as any)?.message ?? ""}`.toLowerCase();
-  if (!message || isLikelyNoDataSignatureRevert(error)) return false;
-
-  return (
-    message.includes("transfer amount exceeds balance") ||
-    message.includes("erc20insufficientbalance") ||
-    message.includes("insufficient balance") ||
-    message.includes("transfer amount exceeds allowance") ||
-    message.includes("erc20insufficientallowance") ||
-    message.includes("insufficient allowance") ||
-    message.includes("min_mint_amount") ||
-    message.includes("min_received") ||
-    message.includes("slippage") ||
-    message.includes("not enough coins removed") ||
-    message.includes("burn amount exceeds") ||
-    message.includes("insufficient lp")
-  );
-};
-
-const ensureCurvePoolVerified = async () => {
-  if (curveVerified) return;
-  if (!curveVerificationPromise) {
-    curveVerificationPromise = (async () => {
-      const { poolAddress, lpTokenAddress, usdcIndex, poolSize, expectedPairTokenAddress } =
-        getCurveConfig();
-      const provider = getProvider();
-
-      if (usdcIndex >= poolSize) {
-        throw new Error(
-          `CURVE_USDC_INDEX ${usdcIndex} is out of range for pool size ${poolSize}.`,
-        );
-      }
-
-      const pool = new ethers.Contract(poolAddress, curvePoolIface, provider);
-      const coinAddresses = await Promise.all(
-        Array.from({ length: poolSize }, (_v, idx) =>
-          (pool as any).coins(idx).then((address: string) => address),
-        ),
-      );
-
-      const expectedUsdc =
-        USDC_TOKEN_ADDRESS_BY_CHAIN[HUB_DESTINATION_CHAIN].toLowerCase();
-      const actualUsdc = coinAddresses[usdcIndex]?.toLowerCase();
-
-      if (!actualUsdc) {
-        throw new Error("Curve pool verification failed: missing coin address.");
-      }
-
-      if (actualUsdc !== expectedUsdc) {
-        throw new Error(
-          `Curve pool USDC index mismatch. Expected ${expectedUsdc} at index ${usdcIndex}, got ${actualUsdc}.`,
-        );
-      }
-
-      const nonUsdcCoinAddresses = coinAddresses
-        .map((address) => address.toLowerCase())
-        .filter((_addr, index) => index !== usdcIndex);
-      if (poolSize === 2) {
-        const actualPair = nonUsdcCoinAddresses[0];
-        if (!actualPair || actualPair !== expectedPairTokenAddress) {
-          throw new Error(
-            `Curve pool pair mismatch. Expected pair token ${expectedPairTokenAddress}, got ${actualPair ?? "missing"}.`,
-          );
-        }
-      } else if (!nonUsdcCoinAddresses.includes(expectedPairTokenAddress)) {
-        throw new Error(
-          `Curve pool pair mismatch. Expected to find pair token ${expectedPairTokenAddress} among ${nonUsdcCoinAddresses.join(", ")}.`,
-        );
-      }
-
-      const symbolChecks = await Promise.all(
-        coinAddresses.map(async (addr) => {
-          const token = new ethers.Contract(addr, erc20ReadAbi, provider);
-          const symbol = await (token as any).symbol();
-          return { addr, symbol };
-        }),
-      );
-
-      const usdcSymbol = symbolChecks[usdcIndex]?.symbol ?? "";
-      if (!usdcSymbol.toUpperCase().includes("USDC")) {
-        throw new Error(
-          `Curve pool verification failed: coin at index ${usdcIndex} is not USDC (symbol ${usdcSymbol}).`,
-        );
-      }
-
-      const lpToken = new ethers.Contract(lpTokenAddress, erc20ReadAbi, provider);
-      try {
-        await Promise.all([(lpToken as any).symbol(), (lpToken as any).decimals()]);
-      } catch (error) {
-        throw new Error(
-          `Curve LP token verification failed for ${lpTokenAddress}: ${
-            (error as Error)?.message ?? "unknown error"
-          }`,
-        );
-      }
-    })()
-      .then(() => {
-        curveVerified = true;
-      })
-      .catch((error) => {
-        curveVerificationPromise = null;
-        throw error;
-      });
-  }
-
-  await curveVerificationPromise;
-};
-
 const waitForCircleTxCompletion = async (params: {
   txId: string;
   label: string;
@@ -352,18 +130,24 @@ const waitForCircleTxCompletion = async (params: {
   const circle = getCircleClient();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const txResp = await (circle as any).getTransaction({ id: txId });
+    const txResp = (await withRetry(
+      () => (circle as any).getTransaction({ id: txId }),
+      { retries: 2 },
+    )) as any;
     const tx = txResp?.data?.transaction as any;
     const state = (tx?.state as string | undefined) ?? null;
     const txHash = (tx?.txHash as string | undefined) ?? null;
 
-    console.info("[liquidity] circle tx status", {
-      label,
-      txId,
-      attempt,
-      state,
-      txHash,
-    });
+    logger.info(
+      {
+        label,
+        txId,
+        attempt,
+        state,
+        txHash,
+      },
+      "[liquidity] circle tx status",
+    );
 
     if (state && ["CONFIRMED", "COMPLETE", "COMPLETED"].includes(state)) {
       return { state, txHash };
@@ -380,11 +164,8 @@ const waitForCircleTxCompletion = async (params: {
 };
 
 const getUserHubWallet = async (uid: string) => {
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const wallet = getWalletByChain(
-    userSnap.data()?.circle?.walletsByChain as Record<string, any> | undefined,
-    HUB_DESTINATION_CHAIN,
-  );
+  const walletsByChain = await getUserCircleWalletsByChain(uid);
+  const wallet = getWalletByChain(walletsByChain, HUB_DESTINATION_CHAIN);
 
   if (!wallet?.walletId || !wallet?.address) {
     throw new Error("Missing user wallet for hub chain.");
@@ -393,126 +174,10 @@ const getUserHubWallet = async (uid: string) => {
   return { walletId: wallet.walletId, address: wallet.address };
 };
 
-const getCurvePositionRef = (uid: string) =>
-  firestoreAdmin.collection("users").doc(uid).collection("positions").doc("curve");
-
 const buildAmountsArray = (poolSize: number, usdcIndex: number, amount: string) => {
   const amounts = Array.from({ length: poolSize }, () => "0");
   amounts[usdcIndex] = amount;
   return amounts;
-};
-
-const toFixedAmounts = (poolSize: number, amounts: string[]) => {
-  if (poolSize === 2) return [amounts[0]!, amounts[1]!] as [string, string];
-  return [amounts[0]!, amounts[1]!, amounts[2]!] as [string, string, string];
-};
-
-const prioritizeCachedSignature = (cached: string | undefined, candidates: string[]) => {
-  if (!cached || !candidates.includes(cached)) return candidates;
-  return [cached, ...candidates.filter((candidate) => candidate !== cached)];
-};
-
-const getCalcTokenAmountCandidates = (poolSize: number) =>
-  poolSize === 2
-    ? [
-        "calc_token_amount(uint256[2],bool)",
-        "calc_token_amount(uint256[2])",
-        "calc_token_amount(uint256[],bool)",
-        "calc_token_amount(uint256[])",
-      ]
-    : [
-        "calc_token_amount(uint256[3],bool)",
-        "calc_token_amount(uint256[3])",
-        "calc_token_amount(uint256[],bool)",
-        "calc_token_amount(uint256[])",
-      ];
-
-const getAddLiquidityCandidates = (poolSize: number) =>
-  poolSize === 2
-    ? [
-        "add_liquidity(uint256[2],uint256)",
-        "add_liquidity(uint256[2],uint256,address)",
-        "add_liquidity(uint256[],uint256)",
-        "add_liquidity(uint256[],uint256,address)",
-      ]
-    : [
-        "add_liquidity(uint256[3],uint256)",
-        "add_liquidity(uint256[3],uint256,address)",
-        "add_liquidity(uint256[],uint256)",
-        "add_liquidity(uint256[],uint256,address)",
-      ];
-
-const getRemoveOneCoinCandidates = () => [
-  "remove_liquidity_one_coin(uint256,int128,uint256)",
-  "remove_liquidity_one_coin(uint256,int128,uint256,address)",
-  "remove_liquidity_one_coin(uint256,uint256,uint256)",
-  "remove_liquidity_one_coin(uint256,uint256,uint256,address)",
-];
-
-const buildCalcTokenAmountArgs = (params: {
-  signature: string;
-  poolSize: number;
-  amounts: string[];
-}) => {
-  const { signature, poolSize, amounts } = params;
-  const fixed = toFixedAmounts(poolSize, amounts);
-
-  if (signature === "calc_token_amount(uint256[2],bool)") return [fixed, true];
-  if (signature === "calc_token_amount(uint256[2])") return [fixed];
-  if (signature === "calc_token_amount(uint256[3],bool)") return [fixed, true];
-  if (signature === "calc_token_amount(uint256[3])") return [fixed];
-  if (signature === "calc_token_amount(uint256[],bool)") return [amounts, true];
-  if (signature === "calc_token_amount(uint256[])") return [amounts];
-
-  throw new Error(`Unsupported calc_token_amount signature: ${signature}`);
-};
-
-const buildAddLiquidityArgs = (params: {
-  signature: string;
-  poolSize: number;
-  amounts: string[];
-  minMintAmount: string;
-  walletAddress: string;
-}) => {
-  const { signature, poolSize, amounts, minMintAmount, walletAddress } = params;
-  const fixed = toFixedAmounts(poolSize, amounts);
-
-  if (signature === "add_liquidity(uint256[2],uint256)") return [fixed, minMintAmount];
-  if (signature === "add_liquidity(uint256[3],uint256)") return [fixed, minMintAmount];
-  if (signature === "add_liquidity(uint256[],uint256)") return [amounts, minMintAmount];
-  if (signature === "add_liquidity(uint256[2],uint256,address)")
-    return [fixed, minMintAmount, walletAddress];
-  if (signature === "add_liquidity(uint256[3],uint256,address)")
-    return [fixed, minMintAmount, walletAddress];
-  if (signature === "add_liquidity(uint256[],uint256,address)")
-    return [amounts, minMintAmount, walletAddress];
-
-  throw new Error(`Unsupported add_liquidity signature: ${signature}`);
-};
-
-const buildRemoveOneCoinArgs = (params: {
-  signature: string;
-  burnAmount: string;
-  usdcIndex: number;
-  minReceived: string;
-  walletAddress: string;
-}) => {
-  const { signature, burnAmount, usdcIndex, minReceived, walletAddress } = params;
-
-  if (signature === "remove_liquidity_one_coin(uint256,int128,uint256)") {
-    return [burnAmount, usdcIndex, minReceived];
-  }
-  if (signature === "remove_liquidity_one_coin(uint256,int128,uint256,address)") {
-    return [burnAmount, usdcIndex, minReceived, walletAddress];
-  }
-  if (signature === "remove_liquidity_one_coin(uint256,uint256,uint256)") {
-    return [burnAmount, BigInt(usdcIndex), minReceived];
-  }
-  if (signature === "remove_liquidity_one_coin(uint256,uint256,uint256,address)") {
-    return [burnAmount, BigInt(usdcIndex), minReceived, walletAddress];
-  }
-
-  throw new Error(`Unsupported remove_liquidity_one_coin signature: ${signature}`);
 };
 
 const estimateLpTokens = async (params: {
@@ -538,12 +203,15 @@ const estimateLpTokens = async (params: {
       });
       const result = await (pool as any)[signature](...args);
       if (cache.calcTokenAmountSig !== signature) {
-        console.info("[liquidity] selected calc_token_amount signature", {
-          poolAddress: params.poolAddress,
-          poolSize: params.poolSize,
-          signature,
-          selector: getSelectorForSignature(signature),
-        });
+        logger.info(
+          {
+            poolAddress: params.poolAddress,
+            poolSize: params.poolSize,
+            signature,
+            selector: getSelectorForSignature(signature),
+          },
+          "[liquidity] selected calc_token_amount signature",
+        );
       }
       cache.calcTokenAmountSig = signature;
       return result as bigint;
@@ -599,12 +267,15 @@ const resolveAddLiquidityCallData = async (params: {
         data: callData,
       });
       if (cache.addLiquiditySig !== signature) {
-        console.info("[liquidity] selected add_liquidity signature", {
-          poolAddress,
-          poolSize,
-          signature,
-          selector: getSelectorForSignature(signature),
-        });
+        logger.info(
+          {
+            poolAddress,
+            poolSize,
+            signature,
+            selector: getSelectorForSignature(signature),
+          },
+          "[liquidity] selected add_liquidity signature",
+        );
       }
       cache.addLiquiditySig = signature;
       return { callData, signature };
@@ -618,13 +289,16 @@ const resolveAddLiquidityCallData = async (params: {
       });
       const callData = curvePoolIface.encodeFunctionData(signature, args);
       if (isLikelyStateDependentRevert(error)) {
-        console.info("[liquidity] selected add_liquidity signature from state-dependent revert", {
-          poolAddress,
-          poolSize,
-          signature,
-          selector: getSelectorForSignature(signature),
-          reason: getErrorMessage(error),
-        });
+        logger.info(
+          {
+            poolAddress,
+            poolSize,
+            signature,
+            selector: getSelectorForSignature(signature),
+            reason: getErrorMessage(error),
+          },
+          "[liquidity] selected add_liquidity signature from state-dependent revert",
+        );
         cache.addLiquiditySig = signature;
         return { callData, signature };
       }
@@ -681,12 +355,15 @@ const resolveRemoveOneCoinCallData = async (params: {
         data: callData,
       });
       if (cache.removeOneCoinSig !== signature) {
-        console.info("[liquidity] selected remove_liquidity_one_coin signature", {
-          poolAddress,
-          poolSize,
-          signature,
-          selector: getSelectorForSignature(signature),
-        });
+        logger.info(
+          {
+            poolAddress,
+            poolSize,
+            signature,
+            selector: getSelectorForSignature(signature),
+          },
+          "[liquidity] selected remove_liquidity_one_coin signature",
+        );
       }
       cache.removeOneCoinSig = signature;
       return { callData, signature };
@@ -700,8 +377,7 @@ const resolveRemoveOneCoinCallData = async (params: {
       });
       const callData = curvePoolIface.encodeFunctionData(signature, args);
       if (isLikelyStateDependentRevert(error)) {
-        console.info(
-          "[liquidity] selected remove_liquidity_one_coin signature from state-dependent revert",
+        logger.info(
           {
             poolAddress,
             poolSize,
@@ -709,6 +385,7 @@ const resolveRemoveOneCoinCallData = async (params: {
             selector: getSelectorForSignature(signature),
             reason: getErrorMessage(error),
           },
+          "[liquidity] selected remove_liquidity_one_coin signature from state-dependent revert",
         );
         cache.removeOneCoinSig = signature;
         return { callData, signature };
@@ -816,13 +493,16 @@ export const depositUsdcToCurve = async (params: { uid: string; amount: string }
   const amountBaseUnitsString = amountBaseUnits.toString();
   const amounts = buildAmountsArray(poolSize, usdcIndex, amountBaseUnitsString);
 
-  console.log("[liquidity] curve deposit", {
-    uid,
-    amount,
-    hubChain: HUB_DESTINATION_CHAIN,
-    poolAddress,
-    usdcIndex,
-  });
+  logger.info(
+    {
+      uid,
+      amount,
+      hubChain: HUB_DESTINATION_CHAIN,
+      poolAddress,
+      usdcIndex,
+    },
+    "[liquidity] curve deposit",
+  );
 
   const estimatedLp = await estimateLpTokens({ poolAddress, poolSize, amounts, provider });
   const minMintAmount = applySlippage(estimatedLp, slippageBps);
@@ -957,10 +637,10 @@ export const getCurvePositionForUser = async (uid: string) => {
   try {
     return await refreshCurvePositionForUser(uid);
   } catch (error) {
-    console.warn("[liquidity] failed to refresh curve position", {
-      uid,
-      error: (error as Error)?.message,
-    });
+    logger.warn(
+      { uid, error: (error as Error)?.message },
+      "[liquidity] failed to refresh curve position",
+    );
 
     const snap = await getCurvePositionRef(uid).get();
     return snap.exists ? ({ id: snap.id, ...snap.data() } as any) : null;

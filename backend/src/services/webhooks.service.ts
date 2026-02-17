@@ -2,10 +2,7 @@ import admin from "firebase-admin";
 
 import { getCircleClient } from "../lib/circleClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
-import {
-  HUB_DESTINATION_CHAIN,
-  normalizeSupportedChain,
-} from "../lib/usdcAddresses.js";
+import { HUB_DESTINATION_CHAIN, normalizeSupportedChain } from "../lib/chains.js";
 import { upsertTransaction } from "../lib/transactions.js";
 import { config } from "../config.js";
 import { recomputeUnifiedUsdcBalance } from "./circle.service.js";
@@ -13,6 +10,10 @@ import { bridgeUsdcToHubForUser } from "./bridge.service.js";
 import { enqueueSameChainSwapToUsdc } from "./swap.service.js";
 import { enqueueBridgeToHubJob, type BridgeToHubJob } from "./queue.service.js";
 import { refreshCurvePositionForUser } from "./liquidity.service.js";
+import { logger } from "../lib/logger.js";
+import { withRetry } from "../lib/retry.js";
+import { getAlertRef, upsertInboundAlertIfChanged } from "../repos/alertsRepo.js";
+import { findDepositByBridgeTxHash, getDepositRef } from "../repos/depositsRepo.js";
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 
@@ -25,42 +26,6 @@ const normalizeState = (state?: string | null) => (state ?? "").toUpperCase();
 const isDoneState = (state?: string | null) => DONE_STATES.has(normalizeState(state));
 
 const isFailedState = (state?: string | null) => FAILED_STATES.has(normalizeState(state));
-
-const getAlertRef = (uid: string, docId: string) =>
-  firestoreAdmin.collection("users").doc(uid).collection("alerts").doc(docId);
-
-const upsertInboundAlertIfChanged = async (
-  uid: string,
-  payload: {
-    txId: string;
-    state: string;
-    blockchain: string | null;
-    amount: string;
-    symbol: string | null;
-  },
-) => {
-  const alertRef = getAlertRef(uid, "inboundUSDC");
-  const snap = await alertRef.get();
-  const current = snap.exists ? (snap.data() as Record<string, unknown>) : null;
-
-  const isSame =
-    current &&
-    current.txId === payload.txId &&
-    current.state === payload.state &&
-    current.blockchain === payload.blockchain &&
-    current.amount === payload.amount &&
-    current.symbol === payload.symbol;
-
-  if (isSame) return;
-
-  await alertRef.set(
-    {
-      ...payload,
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-};
 
 const sanitizeForFirestore = (value: unknown) =>
   JSON.parse(
@@ -85,6 +50,35 @@ const getBridgeDestinationTxHash = (result: any) => {
   return typeof txHash === "string" ? txHash : null;
 };
 
+const getWebhookTxRef = (txId: string) =>
+  firestoreAdmin.collection("webhookTxs").doc(txId);
+
+const markWebhookTxProcessedIfNewState = async (
+  uid: string,
+  tx: { id?: string; state?: string; transactionType?: string; txHash?: string },
+) => {
+  const txId = tx.id;
+  if (!txId) return true;
+  const ref = getWebhookTxRef(txId);
+  const snap = await ref.get();
+  const current = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+  if (current && current.state === tx.state) {
+    return false;
+  }
+
+  await ref.set(
+    {
+      uid,
+      state: tx.state ?? null,
+      transactionType: tx.transactionType ?? null,
+      txHash: tx.txHash ?? null,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+  return true;
+};
+
 
 
 const getTokenInfo = async (circle: ReturnType<typeof getCircleClient>, tokenId?: string) => {
@@ -97,7 +91,9 @@ const getTokenInfo = async (circle: ReturnType<typeof getCircleClient>, tokenId?
     };
   }
 
-  const tokenResp = await circle.getToken({ id: tokenId });
+  const tokenResp = await withRetry(() => circle.getToken({ id: tokenId }), {
+    retries: 2,
+  });
   const token = tokenResp.data?.token as any;
   const symbol = (token?.symbol as string | undefined) ?? null;
   const tokenAddress = (token?.tokenAddress as string | undefined) ?? null;
@@ -203,10 +199,16 @@ const handleCurveLiquidityExecution = async (params: { tx: any; uid?: string }) 
 
   if (isDoneState(tx.state)) {
     await refreshCurvePositionForUser(uid).catch((error) => {
-      console.error("[liquidity] failed to refresh curve position", {
-        uid,
-        error: (error as Error)?.message,
-      });
+      logger.error(
+        { uid, error: (error as Error)?.message },
+        "[liquidity] failed to refresh curve position",
+      );
+    });
+    await recomputeUnifiedUsdcBalance(uid).catch((error) => {
+      logger.error(
+        { uid, error: (error as Error)?.message },
+        "[liquidity] failed to recompute unified balance",
+      );
     });
   }
 };
@@ -215,26 +217,25 @@ export const processBridgeToHubJob = async (params: BridgeToHubJob) => {
   const { uid, txId, walletId, sourceChain, amount, symbol } = params;
   const normalizedSourceChain = normalizeSupportedChain(sourceChain);
 
-  const depositRef = firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("deposits")
-    .doc(txId);
+  const depositRef = getDepositRef(uid, txId);
 
   try {
     if (!normalizedSourceChain) {
       throw new Error(`Unsupported source chain for bridge job: ${sourceChain}`);
     }
     // Diagnostic: log job context
-    console.log("[processBridgeToHubJob] start", {
-      uid,
-      txId,
-      walletId,
-      sourceChain,
-      normalizedSourceChain,
-      hub: HUB_DESTINATION_CHAIN,
-      amount,
-    });
+    logger.info(
+      {
+        uid,
+        txId,
+        walletId,
+        sourceChain,
+        normalizedSourceChain,
+        hub: HUB_DESTINATION_CHAIN,
+        amount,
+      },
+      "[processBridgeToHubJob] start",
+    );
     if (normalizedSourceChain === HUB_DESTINATION_CHAIN) {
       await depositRef.set(
         {
@@ -296,13 +297,16 @@ export const processBridgeToHubJob = async (params: BridgeToHubJob) => {
 
     await recomputeUnifiedUsdcBalance(uid);
   } catch (error) {
-    console.error("Failed to bridge USDC to hub chain", {
-      txId,
-      uid,
-      walletId,
-      blockchain: normalizedSourceChain ?? sourceChain,
-      error: (error as Error)?.message,
-    });
+    logger.error(
+      {
+        txId,
+        uid,
+        walletId,
+        blockchain: normalizedSourceChain ?? sourceChain,
+        error: (error as Error)?.message,
+      },
+      "Failed to bridge USDC to hub chain",
+    );
 
     await depositRef.set(
       {
@@ -347,27 +351,13 @@ const handleInboundTransaction = async (params: {
   let depositId = tx.id as string;
 
   if (isHub && tx.txHash) {
-    const bridgedSnap = await firestoreAdmin
-      .collection("users")
-      .doc(uid)
-      .collection("deposits")
-      .where("bridge.destinationTxHash", "==", tx.txHash)
-      .limit(1)
-      .get();
-
-    if (!bridgedSnap.empty && bridgedSnap.docs.length > 0) {
-      const [firstDoc] = bridgedSnap.docs;
-      if (firstDoc) {
-        depositId = firstDoc.id;
-      }
+    const bridged = await findDepositByBridgeTxHash(uid, tx.txHash);
+    if (bridged?.id) {
+      depositId = bridged.id;
     }
   }
 
-  const depositRef = firestoreAdmin
-    .collection("users")
-    .doc(uid)
-    .collection("deposits")
-    .doc(depositId);
+  const depositRef = getDepositRef(uid, depositId);
 
   await depositRef.set(
     {
@@ -412,11 +402,14 @@ const handleInboundTransaction = async (params: {
       });
     } else if (!existingBridgeStatus || existingBridgeStatus === "FAILED") {
       if (!chain) {
-        console.warn("[webhook] skipping auto-bridge for unknown inbound chain", {
-          txId: tx.id ?? null,
-          uid,
-          rawBlockchain: tx.blockchain ?? null,
-        });
+        logger.warn(
+          {
+            txId: tx.id ?? null,
+            uid,
+            rawBlockchain: tx.blockchain ?? null,
+          },
+          "[webhook] skipping auto-bridge for unknown inbound chain",
+        );
         return;
       }
 
@@ -482,18 +475,21 @@ const handleInboundTransaction = async (params: {
           amount,
         });
       } catch (e) {
-        console.error("Failed to enqueue same-chain swap to USDC", {
-          txId: tx.id,
-          uid,
-          walletId: tx.walletId ?? null,
-          blockchain: chain ?? tx.blockchain ?? null,
-          state,
-          amount,
-          symbol,
-          tokenAddress,
-          decimals,
-          error: (e as Error)?.message,
-        });
+        logger.error(
+          {
+            txId: tx.id,
+            uid,
+            walletId: tx.walletId ?? null,
+            blockchain: chain ?? tx.blockchain ?? null,
+            state,
+            amount,
+            symbol,
+            tokenAddress,
+            decimals,
+            error: (e as Error)?.message,
+          },
+          "Failed to enqueue same-chain swap to USDC",
+        );
       }
     }
   }
@@ -505,6 +501,19 @@ export const handleCircleWebhookTransaction = async (params: {
   circle: ReturnType<typeof getCircleClient>;
 }) => {
   const { uid, tx, circle } = params;
+  const shouldProcess = await markWebhookTxProcessedIfNewState(uid, {
+    id: tx?.id,
+    state: tx?.state,
+    transactionType: tx?.transactionType,
+    txHash: tx?.txHash,
+  });
+  if (!shouldProcess) {
+    logger.info(
+      { txId: tx?.id ?? null, state: tx?.state ?? null },
+      "[webhook] skipping duplicate state",
+    );
+    return;
+  }
 
   if (tx.transactionType === "OUTBOUND") {
     const refId = (tx.refId as string | undefined) ?? "";

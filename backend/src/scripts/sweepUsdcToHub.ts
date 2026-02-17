@@ -6,9 +6,8 @@ import {
   HUB_DESTINATION_CHAIN,
   SUPPORTED_EVM_CHAINS,
   type SupportedChain,
-  USDC_DECIMALS,
-  USDC_TOKEN_ADDRESS_BY_CHAIN,
-} from "../lib/usdcAddresses.js";
+} from "../lib/chains.js";
+import { USDC_DECIMALS, USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
 import { getWalletByChain } from "../lib/wallets.js";
 import { bridgeUsdcToHubForUser } from "../services/bridge.service.js";
 import { recomputeUnifiedUsdcBalance } from "../services/circle.service.js";

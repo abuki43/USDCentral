@@ -1,12 +1,10 @@
 import { BridgeKit } from "@circle-fin/bridge-kit";
 import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
 
-import { firestoreAdmin } from "../lib/firebaseAdmin.js";
-import {
-  HUB_DESTINATION_CHAIN,
-  type SupportedChain,
-} from "../lib/usdcAddresses.js";
+import { HUB_DESTINATION_CHAIN, type SupportedChain } from "../lib/chains.js";
 import { getWalletByChain } from "../lib/wallets.js";
+import { logger } from "../lib/logger.js";
+import { getUserCircleWalletsByChain } from "../repos/usersRepo.js";
 
 const BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN = {
   "ETH-SEPOLIA": "Ethereum_Sepolia",
@@ -48,23 +46,23 @@ export const bridgeUsdcToHubForUser = async (params: {
     throw new Error("Source chain is already the hub chain.");
   }
 
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletsByChain = (userSnap.data()?.circle?.walletsByChain ?? {}) as
-    | Record<string, { address?: string }>
-    | undefined;
+  const walletsByChain = await getUserCircleWalletsByChain(uid);
 
   const sourceAddress = walletsByChain?.[sourceChain]?.address;
   const hubAddress = walletsByChain?.[HUB_DESTINATION_CHAIN]?.address;
 
   if (!sourceAddress || !hubAddress) {
-    console.error("Missing wallet addresses", {
-      uid,
-      sourceChain,
-      hubChain: HUB_DESTINATION_CHAIN,
-      walletsByChainKeys: Object.keys(walletsByChain ?? {}),
-      sourceAddress,
-      hubAddress,
-    });
+    logger.error(
+      {
+        uid,
+        sourceChain,
+        hubChain: HUB_DESTINATION_CHAIN,
+        walletsByChainKeys: Object.keys(walletsByChain ?? {}),
+        sourceAddress,
+        hubAddress,
+      },
+      "Missing wallet addresses",
+    );
     throw new Error("Missing source or hub wallet address for user.");
   }
 
@@ -92,19 +90,22 @@ export const bridgeUsdcToHubForUser = async (params: {
     recipientAddress: hubAddress,
   };
 
-  console.log("BridgeKit: USDC to Hub", {
-    uid,
-    amount,
-    sourceChainCircleKey: sourceChain,
-    hubChainCircleKey: HUB_DESTINATION_CHAIN,
-    fromChain: from.chain,
-    fromAddress: from.address,
-    toChain: to.chain,
-    toAddress: to.recipientAddress,
-    bridgeKitFromChain,
-    bridgeKitToChain,
-    walletsByChainKeys: Object.keys(walletsByChain ?? {}),
-  });
+  logger.info(
+    {
+      uid,
+      amount,
+      sourceChainCircleKey: sourceChain,
+      hubChainCircleKey: HUB_DESTINATION_CHAIN,
+      fromChain: from.chain,
+      fromAddress: from.address,
+      toChain: to.chain,
+      toAddress: to.recipientAddress,
+      bridgeKitFromChain,
+      bridgeKitToChain,
+      walletsByChainKeys: Object.keys(walletsByChain ?? {}),
+    },
+    "BridgeKit: USDC to Hub",
+  );
 
   const result = await kit.bridge({
     from: from as any,
@@ -124,10 +125,7 @@ export const estimateBridgeUsdcToHubForUser = async (params: {
     throw new Error("Source chain is already the hub chain.");
   }
 
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletsByChain = (userSnap.data()?.circle?.walletsByChain ?? {}) as
-    | Record<string, { address?: string }>
-    | undefined;
+  const walletsByChain = await getUserCircleWalletsByChain(uid);
 
   const sourceAddress = walletsByChain?.[sourceChain]?.address;
   const hubAddress = walletsByChain?.[HUB_DESTINATION_CHAIN]?.address;
@@ -176,14 +174,16 @@ export const bridgeUsdcFromHubForUser = async (params: {
     throw new Error("Destination chain is already the hub chain.");
   }
 
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletsByChain = (userSnap.data()?.circle?.walletsByChain ?? {}) as
-    | Record<string, { address?: string }>
-    | undefined;
+  const walletsByChain = await getUserCircleWalletsByChain(uid);
 
   const hubAddress = getWalletByChain(walletsByChain, HUB_DESTINATION_CHAIN)?.address;
+  const destinationWallet = getWalletByChain(walletsByChain, destinationChain);
+  const destinationAddress = destinationWallet?.address;
   if (!hubAddress) {
     throw new Error("Missing hub wallet address for user.");
+  }
+  if (!destinationAddress) {
+    throw new Error("Missing destination wallet address for user.");
   }
 
   const adapter = getBridgeKitAdapter();
@@ -203,18 +203,21 @@ export const bridgeUsdcFromHubForUser = async (params: {
   } = {
     adapter,
     chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[destinationChain],
-    address: recipientAddress,
+    address: destinationAddress,
     recipientAddress,
   };
 
-  console.log("BridgeKit: USDC from Hub", {
-    uid,
-    amount,
-    fromChain: from.chain,
-    fromAddress: from.address,
-    toChain: to.chain,
-    toAddress: to.recipientAddress,
-  });
+  logger.info(
+    {
+      uid,
+      amount,
+      fromChain: from.chain,
+      fromAddress: from.address,
+      toChain: to.chain,
+      toAddress: to.recipientAddress,
+    },
+    "BridgeKit: USDC from Hub",
+  );
 
   return kit.bridge({
     from: from as any,
@@ -235,14 +238,16 @@ export const estimateBridgeUsdcFromHubForUser = async (params: {
     throw new Error("Destination chain is already the hub chain.");
   }
 
-  const userSnap = await firestoreAdmin.collection("users").doc(uid).get();
-  const walletsByChain = (userSnap.data()?.circle?.walletsByChain ?? {}) as
-    | Record<string, { address?: string }>
-    | undefined;
+  const walletsByChain = await getUserCircleWalletsByChain(uid);
 
   const hubAddress = getWalletByChain(walletsByChain, HUB_DESTINATION_CHAIN)?.address;
+  const destinationWallet = getWalletByChain(walletsByChain, destinationChain);
+  const destinationAddress = destinationWallet?.address;
   if (!hubAddress) {
     throw new Error("Missing hub wallet address for user.");
+  }
+  if (!destinationAddress) {
+    throw new Error("Missing destination wallet address for user.");
   }
 
   const adapter = getBridgeKitAdapter();
@@ -262,7 +267,7 @@ export const estimateBridgeUsdcFromHubForUser = async (params: {
   } = {
     adapter,
     chain: BRIDGE_KIT_CHAIN_BY_CIRCLE_CHAIN[destinationChain],
-    address: recipientAddress,
+    address: destinationAddress,
     recipientAddress,
   };
 

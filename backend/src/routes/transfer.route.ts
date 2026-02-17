@@ -10,10 +10,8 @@ import {
 import { getCircleClient } from "../lib/circleClient.js";
 import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { upsertTransaction } from "../lib/transactions.js";
-import {
-  HUB_DESTINATION_CHAIN,
-  USDC_TOKEN_ADDRESS_BY_CHAIN,
-} from "../lib/usdcAddresses.js";
+import { HUB_DESTINATION_CHAIN } from "../lib/chains.js";
+import { USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
 import { getWalletByChain } from "../lib/wallets.js";
 import { provisionCircleWalletsForUser, recomputeUnifiedUsdcBalance } from "../services/circle.service.js";
 

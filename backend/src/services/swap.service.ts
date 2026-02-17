@@ -9,12 +9,14 @@ import { firestoreAdmin } from "../lib/firebaseAdmin.js";
 import { upsertTransaction } from "../lib/transactions.js";
 import { formatDecimalFromBaseUnits, parseBigintMaybeHex } from "../lib/units.js";
 import { config } from "../config.js";
+import { logger } from "../lib/logger.js";
+import { isCircleTxDone, isCircleTxFailed, toBaseUnits } from "./swap/swapUtils.js";
 import {
   SUPPORTED_EVM_CHAINS,
   SUPPORTED_SOL_CHAINS,
-  USDC_TOKEN_ADDRESS_BY_CHAIN,
   type SupportedChain,
-} from "../lib/usdcAddresses.js";
+} from "../lib/chains.js";
+import { USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
 import { recomputeUnifiedUsdcBalance } from "./circle.service.js";
 import { enqueueSwapProcessJob } from "./queue.service.js";
 
@@ -64,7 +66,7 @@ type SwapJobDoc = {
 };
 
 const logSwapError = (message: string, meta?: Record<string, unknown>) => {
-  console.error(`[swap] ${message}`, meta ?? {});
+  logger.error(meta ?? {}, `[swap] ${message}`);
 };
 
 // Temporary: LI.FI no longer supports testnets 
@@ -97,14 +99,6 @@ const upsertSwapTransaction = async (
       error: extra?.error ?? null,
     },
   });
-};
-
-const toBaseUnits = (amount: string, decimals: number) => {
-  const [whole, fractionRaw = ""] = amount.split(".");
-  const fraction = fractionRaw.padEnd(decimals, "0").slice(0, decimals);
-  const normalizedWhole = (whole ?? "0").replace(/^0+(?=\d)/, "") || "0";
-  const normalized = `${normalizedWhole}${fraction}`.replace(/^0+(?=\d)/, "") || "0";
-  return BigInt(normalized);
 };
 
 const erc20Iface = new Interface(["function approve(address spender, uint256 amount) returns (bool)"]);
@@ -161,16 +155,6 @@ const releaseLock = async (jobRef: admin.firestore.DocumentReference) => {
     },
     { merge: true },
   );
-};
-
-const isCircleTxDone = (state: string) => {
-  const s = state.toUpperCase();
-  return s === "COMPLETE" || s === "COMPLETED" || s === "CONFIRMED";
-};
-
-const isCircleTxFailed = (state: string) => {
-  const s = state.toUpperCase();
-  return s === "FAILED" || s === "CANCELLED" || s === "DENIED" || s === "REJECTED";
 };
 
 const buildSameChainUsdcRoute = async (job: SwapJobDoc) => {
@@ -234,7 +218,7 @@ export const enqueueSameChainSwapToUsdc = async (input: {
   amount: string;
 }) => {
   if (AUTO_SWAP_DISABLED_CHAINS.has(input.blockchain)) {
-    console.log(
+    logger.info(
       `[swap] Auto-swap disabled on testnet chain ${input.blockchain}; skipping depositTxId=${input.depositTxId}`,
     );
     return { enqueued: false };
@@ -244,12 +228,15 @@ export const enqueueSameChainSwapToUsdc = async (input: {
   if (!input.tokenAddress) return { enqueued: false };
   if (input.tokenSymbol?.toUpperCase() === "USDC") return { enqueued: false };
   if (isLpTokenAddress(input.tokenAddress)) {
-    console.log("[swap] Skipping auto-swap for LP token", {
-      depositTxId: input.depositTxId,
-      blockchain: input.blockchain,
-      tokenAddress: input.tokenAddress,
-      tokenSymbol: input.tokenSymbol,
-    });
+    logger.info(
+      {
+        depositTxId: input.depositTxId,
+        blockchain: input.blockchain,
+        tokenAddress: input.tokenAddress,
+        tokenSymbol: input.tokenSymbol,
+      },
+      "[swap] Skipping auto-swap for LP token",
+    );
     return { enqueued: false };
   }
 
@@ -315,14 +302,17 @@ export const enqueueSameChainSwapToUsdc = async (input: {
 
   await enqueueSwapProcessJob({ depositTxId: input.depositTxId });
 
-  console.log("[swap] Enqueued same-chain swap to USDC", {
-    depositTxId: input.depositTxId,
-    uid: input.uid,
-    blockchain: input.blockchain,
-    fromTokenAddress,
-    fromTokenSymbol: input.tokenSymbol,
-    fromAmount: input.amount,
-  });
+  logger.info(
+    {
+      depositTxId: input.depositTxId,
+      uid: input.uid,
+      blockchain: input.blockchain,
+      fromTokenAddress,
+      fromTokenSymbol: input.tokenSymbol,
+      fromAmount: input.amount,
+    },
+    "[swap] Enqueued same-chain swap to USDC",
+  );
 
   return { enqueued: true };
 };
@@ -332,11 +322,14 @@ const advanceJob = async (jobRef: admin.firestore.DocumentReference, job: SwapJo
 
   if (AUTO_SWAP_DISABLED_CHAINS.has(job.blockchain)) {
     const msg = `Auto-swap disabled on testnet chain ${job.blockchain}.`;
-    console.log(`[swap] ${msg} Failing swap job.`, {
-      depositTxId: job.depositTxId,
-      uid: job.uid,
-      status: job.status,
-    });
+    logger.info(
+      {
+        depositTxId: job.depositTxId,
+        uid: job.uid,
+        status: job.status,
+      },
+      `[swap] ${msg} Failing swap job.`,
+    );
     await jobRef.set(
       {
         status: "FAILED",

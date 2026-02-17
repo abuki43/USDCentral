@@ -1,18 +1,4 @@
-export const SUPPORTED_EVM_CHAINS = [
-  "ETH-SEPOLIA",
-  "MATIC-AMOY",
-  "ARB-SEPOLIA",
-  "OP-SEPOLIA",
-  "BASE-SEPOLIA",
-] as const;
-
-export const SUPPORTED_SOL_CHAINS = ["SOL-DEVNET"] as const;
-
-export const HUB_DESTINATION_CHAIN = "ARB-SEPOLIA" as const;
-
-export type SupportedChain =
-  | (typeof SUPPORTED_EVM_CHAINS)[number]
-  | (typeof SUPPORTED_SOL_CHAINS)[number];
+import type { SupportedChain } from "./chains.js";
 
 export const USDC_DECIMALS = 6;
 
@@ -24,25 +10,4 @@ export const USDC_TOKEN_ADDRESS_BY_CHAIN: Record<SupportedChain, string> = {
   "OP-SEPOLIA": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
   "BASE-SEPOLIA": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   "SOL-DEVNET": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
-};
-
-const CHAIN_ALIASES: Record<string, SupportedChain> = {
-  "ETH-SEPOLIA": "ETH-SEPOLIA",
-  "ETHEREUM-SEPOLIA": "ETH-SEPOLIA",
-  "MATIC-AMOY": "MATIC-AMOY",
-  "POLYGON-AMOY": "MATIC-AMOY",
-  "POLYGON-AMOY-TESTNET": "MATIC-AMOY",
-  "ARB-SEPOLIA": "ARB-SEPOLIA",
-  "ARBITRUM-SEPOLIA": "ARB-SEPOLIA",
-  "OP-SEPOLIA": "OP-SEPOLIA",
-  "OPTIMISM-SEPOLIA": "OP-SEPOLIA",
-  "BASE-SEPOLIA": "BASE-SEPOLIA",
-  "SOL-DEVNET": "SOL-DEVNET",
-  "SOLANA-DEVNET": "SOL-DEVNET",
-};
-
-export const normalizeSupportedChain = (value?: string | null): SupportedChain | null => {
-  if (!value) return null;
-  const normalized = value.trim().toUpperCase().replace(/_/g, "-");
-  return CHAIN_ALIASES[normalized] ?? null;
 };

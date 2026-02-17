@@ -7,10 +7,10 @@ import {
   SUPPORTED_SOL_CHAINS,
   type SupportedChain,
   normalizeSupportedChain,
-  USDC_DECIMALS,
-  USDC_TOKEN_ADDRESS_BY_CHAIN,
-} from "../lib/usdcAddresses.js";
+} from "../lib/chains.js";
+import { USDC_DECIMALS, USDC_TOKEN_ADDRESS_BY_CHAIN } from "../lib/usdcAddresses.js";
 import { getWalletByChain } from "../lib/wallets.js";
+import { withRetry } from "../lib/retry.js";
 
 const serverTimestamp = () => admin.firestore.FieldValue.serverTimestamp();
 
@@ -62,21 +62,29 @@ export const provisionCircleWalletsForUser = async (uid: string) => {
     return existing;
   }
 
-  const evmResp = await circle.createWallets({
-    walletSetId,
-    blockchains: [...SUPPORTED_EVM_CHAINS],
-    count: 1,
-    metadata: [{ refId: uid, name: `user:${uid}` }],
-    accountType: "SCA",
-  });
+  const evmResp = await withRetry(
+    () =>
+      circle.createWallets({
+        walletSetId,
+        blockchains: [...SUPPORTED_EVM_CHAINS],
+        count: 1,
+        metadata: [{ refId: uid, name: `user:${uid}` }],
+        accountType: "SCA",
+      }),
+    { retries: 2 },
+  );
 
-  const solResp = await circle.createWallets({
-    walletSetId,
-    blockchains: [...SUPPORTED_SOL_CHAINS],
-    count: 1,
-    metadata: [{ refId: uid, name: `user:${uid}` }],
-    accountType: "EOA",
-  });
+  const solResp = await withRetry(
+    () =>
+      circle.createWallets({
+        walletSetId,
+        blockchains: [...SUPPORTED_SOL_CHAINS],
+        count: 1,
+        metadata: [{ refId: uid, name: `user:${uid}` }],
+        accountType: "EOA",
+      }),
+    { retries: 2 },
+  );
 
   const wallets = [...(evmResp.data?.wallets ?? []), ...(solResp.data?.wallets ?? [])];
 
@@ -153,11 +161,15 @@ export const recomputeUnifiedUsdcBalance = async (uid: string) => {
     if (!walletId) continue;
 
     const tokenAddress = USDC_TOKEN_ADDRESS_BY_CHAIN[chain];
-    const resp = await circle.getWalletTokenBalance({
-      id: walletId,
-      tokenAddresses: [tokenAddress],
-      includeAll: true,
-    });
+    const resp = await withRetry(
+      () =>
+        circle.getWalletTokenBalance({
+          id: walletId,
+          tokenAddresses: [tokenAddress],
+          includeAll: true,
+        }),
+      { retries: 2 },
+    );
 
     const amount = getUsdcAmountFromBalanceResponse(resp, tokenAddress);
     const micro = toBaseUnits(amount, USDC_DECIMALS);
