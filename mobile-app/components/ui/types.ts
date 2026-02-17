@@ -96,6 +96,7 @@ export interface TransactionItemProps {
   status: TransactionStatus;
   timestamp: string;
   onPress?: () => void;
+  hideAmount?: boolean;
 }
 
 export interface TransactionConfig {

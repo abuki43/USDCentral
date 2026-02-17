@@ -7,7 +7,7 @@ import { backendFetch } from '@/lib/backend';
 import { CHAIN_LABELS, type WithdrawChain, WITHDRAW_CHAINS } from '@/lib/chains';
 import Button from '@/components/ui/Button';
 
-const BASE_CHAIN: WithdrawChain = 'BASE-SEPOLIA';
+const HUB_CHAIN: WithdrawChain = 'ARB-SEPOLIA';
 
 type BridgeEstimate = {
   fees?: { type?: string; amount?: string }[];
@@ -15,7 +15,7 @@ type BridgeEstimate = {
 
 export default function WithdrawScreen() {
   const router = useRouter();
-  const [destinationChain, setDestinationChain] = useState<WithdrawChain>(BASE_CHAIN);
+  const [destinationChain, setDestinationChain] = useState<WithdrawChain>(HUB_CHAIN);
   const [recipientAddress, setRecipientAddress] = useState('');
   const [amount, setAmount] = useState('');
   const [isEstimating, setIsEstimating] = useState(false);
@@ -25,13 +25,13 @@ export default function WithdrawScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
-  const isBase = destinationChain === BASE_CHAIN;
+  const isHub = destinationChain === HUB_CHAIN;
 
   useEffect(() => {
     setEstimate(null);
     setEstimateError(null);
 
-    if (isBase) return;
+    if (isHub) return;
     if (!amount || !recipientAddress) return;
 
     const timeout = setTimeout(() => {
@@ -54,7 +54,7 @@ export default function WithdrawScreen() {
     }, 400);
 
     return () => clearTimeout(timeout);
-  }, [amount, destinationChain, recipientAddress, isBase]);
+  }, [amount, destinationChain, recipientAddress, isHub]);
 
   const providerFee = useMemo(() => {
     if (!estimate?.fees) return null;
@@ -103,7 +103,7 @@ export default function WithdrawScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>Withdraw USDC</Text>
           <Text style={styles.subtitle}>
-            Choose a destination chain and address. We'll bridge from Base when needed.
+            Choose a destination chain and address. We'll bridge from Arbitrum when needed.
           </Text>
         </View>
 
@@ -165,9 +165,9 @@ export default function WithdrawScreen() {
             <Text style={styles.feesTitle}>Estimated fees</Text>
           </View>
           
-          {isBase ? (
+          {isHub ? (
             <Text style={styles.feesText}>
-              Direct transfer on Base. Standard network fees apply.
+              Direct transfer on Arbitrum. Standard network fees apply.
             </Text>
           ) : isEstimating ? (
             <View style={styles.loadingRow}>

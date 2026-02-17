@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BalanceCardProps } from './types';
@@ -9,10 +8,9 @@ export default function BalanceCard({
   onHideToggle,
   hidden = false,
 }: BalanceCardProps) {
-  const [isHidden, setIsHidden] = useState(hidden);
+  const isHidden = hidden;
 
   const toggleHide = () => {
-    setIsHidden(!isHidden);
     onHideToggle?.();
   };
 

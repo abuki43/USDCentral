@@ -105,7 +105,7 @@ export default function SendScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>Send USDC</Text>
           <Text style={styles.subtitle}>
-            Send USDC on Base using an App ID or email.
+            Send USDC on Arbitrum using an App ID or email.
           </Text>
         </View>
 

@@ -63,12 +63,13 @@ type UnifiedTransaction = {
   updatedAt?: Timestamp | string | null;
 };
 
-const BASE_CHAIN = 'BASE-SEPOLIA';
+const HUB_CHAIN = 'ARB-SEPOLIA';
 
 export default function TabOneScreen() {
   const { user } = useAuthStore();
   const router = useRouter();
   const [balance, setBalance] = useState<string>('0.00');
+  const [isBalanceHidden, setIsBalanceHidden] = useState(false);
   const [alert, setAlert] = useState<InboundAlertDoc | null>(null);
   const [incomingAlert, setIncomingAlert] = useState<InboundTokenAlert | null>(null);
   const [finalizedAlert, setFinalizedAlert] = useState<FinalizedTokenAlert | null>(null);
@@ -87,36 +88,25 @@ export default function TabOneScreen() {
       return 0;
     };
 
-    const isFinalBaseDeposit = (tx: UnifiedTransaction) => {
+    const isFinalHubDeposit = (tx: UnifiedTransaction) => {
       if (tx.kind !== 'DEPOSIT') return true;
       const blockchain = tx.blockchain ?? null;
       const source = tx.sourceChain ?? null;
-      if (source && source !== BASE_CHAIN) return false;
-      return blockchain === BASE_CHAIN;
+      if (source && source !== HUB_CHAIN) return false;
+      return blockchain === HUB_CHAIN;
     };
 
-    const earnActions = new Set(['ADD_LIQUIDITY', 'WITHDRAW_LIQUIDITY', 'COLLECT_FEES']);
-    const withdrawPositionIds = new Set(
-      transactions
-        .filter((tx) => tx.kind === 'EARN' && tx.metadata?.action === 'WITHDRAW_LIQUIDITY')
-        .map((tx) => tx.metadata?.positionId)
-        .filter((id): id is string => Boolean(id)),
-    );
+    const earnActions = new Set(['ADD_LIQUIDITY', 'WITHDRAW_LIQUIDITY']);
 
     const isVisibleEarn = (tx: UnifiedTransaction) => {
       if (tx.kind !== 'EARN') return true;
       const action = tx.metadata?.action as string | undefined;
-      if (!action || !earnActions.has(action)) return false;
-      if (action === 'COLLECT_FEES') {
-        const positionId = tx.metadata?.positionId as string | undefined;
-        if (positionId && withdrawPositionIds.has(positionId)) return false;
-      }
-      return true;
+      return Boolean(action && earnActions.has(action));
     };
 
     return [...transactions]
       .filter((tx) => tx.kind !== 'BRIDGE')
-      .filter(isFinalBaseDeposit)
+      .filter(isFinalHubDeposit)
       .filter(isVisibleEarn)
       .sort((a, b) => {
         const aTime = toMillis(a.updatedAt ?? a.createdAt);
@@ -147,12 +137,7 @@ export default function TabOneScreen() {
 
   useEffect(() => {
     if (!alert?.state) return;
-    const updatedAt = alert.updatedAt instanceof Timestamp
-      ? alert.updatedAt.toMillis()
-      : typeof alert.updatedAt === 'string'
-        ? new Date(alert.updatedAt).getTime()
-        : 0;
-    const key = [alert.txId ?? 'no-tx', alert.state ?? 'no-state', updatedAt].join(':');
+    const key = [alert.txId ?? 'no-tx', alert.state ?? 'no-state'].join(':');
     if (lastAlertKeyRef.current === key) return;
     lastAlertKeyRef.current = key;
 
@@ -253,6 +238,8 @@ export default function TabOneScreen() {
         <BalanceCard 
           balance={balance}
           symbol="USDC"
+          hidden={isBalanceHidden}
+          onHideToggle={() => setIsBalanceHidden((prev) => !prev)}
         />
 
         {/* Action Buttons */}
@@ -327,6 +314,7 @@ export default function TabOneScreen() {
                   amount={tx.amount ?? '0'}
                   symbol={tx.symbol ?? 'USDC'}
                   status={tx.status}
+                  hideAmount={isBalanceHidden}
                   timestamp={
                     tx.createdAt instanceof Timestamp
                       ? tx.createdAt.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })

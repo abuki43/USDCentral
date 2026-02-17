@@ -2,6 +2,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { TransactionItemProps, TransactionType, TransactionConfig, StatusConfig } from './types';
+import { formatDecimal, formatUsdcAmount } from '@/lib/format';
 
 const TYPE_CONFIG: Record<TransactionType, TransactionConfig> = {
   DEPOSIT: { icon: 'arrow-down-circle', color: '#10B981', label: 'Deposit' },
@@ -29,13 +30,23 @@ export default function TransactionItem({
   status,
   timestamp,
   onPress,
+  hideAmount = false,
 }: TransactionItemProps) {
   const [expanded, setExpanded] = useState(false);
   const config = TYPE_CONFIG[type];
   const statusConfig = STATUS_CONFIG[status];
 
   const isIncoming = type === 'DEPOSIT' || type === 'RECEIVE';
-  const formattedAmount = `${isIncoming ? '+' : '-'}${amount} ${symbol}`;
+  const symbolText = symbol ?? 'USDC';
+  const symbolUpper = symbolText.toUpperCase();
+  const formattedNumeric = hideAmount
+    ? '••••••'
+    : symbolUpper === 'USDC'
+      ? formatUsdcAmount(amount)
+      : formatDecimal(amount, { maxFraction: 4, minFraction: 0 });
+  const formattedAmount = hideAmount
+    ? `${formattedNumeric} ${symbolText}`
+    : `${isIncoming ? '+' : '-'}${formattedNumeric} ${symbolText}`;
 
   return (
     <Pressable

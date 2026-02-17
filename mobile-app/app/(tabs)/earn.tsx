@@ -1,45 +1,66 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, StyleSheet, SafeAreaView } from 'react-native';
 
-import { useLiquidityStore, type RangePreset } from '@/store/liquidityStore';
+import { useLiquidityStore } from '@/store/liquidityStore';
+import { formatDecimal, formatFromBaseUnits, formatUsdcAmount } from '@/lib/format';
 
 export default function EarnScreen() {
   const {
     isLoading,
     error,
     quote,
-    positions,
+    position,
     fetchQuote,
-    createPosition,
-    loadPositions,
-    collectFees,
-    withdrawPosition,
+    deposit,
+    loadPosition,
+    withdraw,
   } = useLiquidityStore();
 
-  const [amount, setAmount] = useState('');
-  const preset: RangePreset = 'balanced';
+  const [depositAmount, setDepositAmount] = useState('');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
 
   useEffect(() => {
-    loadPositions().catch(() => undefined);
-  }, [loadPositions]);
+    loadPosition().catch(() => undefined);
+  }, [loadPosition]);
+
+  const hasPosition = Boolean(position?.status && position.status !== 'EMPTY');
+  const canPreview = Boolean(depositAmount.trim()) && !isLoading;
+  const canSupply = Boolean(depositAmount.trim()) && !isLoading;
+  const canWithdraw = Boolean(withdrawAmount.trim()) && !isLoading;
+  const lpDecimals = typeof position?.lpDecimals === 'number' ? position.lpDecimals : null;
+  const lpBalanceDisplay =
+    position?.lpBalance && lpDecimals != null
+      ? formatFromBaseUnits(position.lpBalance, lpDecimals, { maxFraction: 6 })
+      : position?.lpBalance ?? '—';
+  const usdcValueDisplay = position?.usdcValue
+    ? formatUsdcAmount(position.usdcValue)
+    : '—';
+  const quoteLpDisplay =
+    quote?.estimatedLpTokens && lpDecimals != null
+      ? formatFromBaseUnits(quote.estimatedLpTokens, lpDecimals, { maxFraction: 6 })
+      : quote?.estimatedLpTokens ?? '—';
+  const quoteMinLpDisplay =
+    quote?.minMintAmount && lpDecimals != null
+      ? formatFromBaseUnits(quote.minMintAmount, lpDecimals, { maxFraction: 6 })
+      : quote?.minMintAmount ?? '—';
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
           <Text style={styles.title}>Earn</Text>
-          <Text style={styles.subtitle}>Provide USDC liquidity to a stable pool on Base</Text>
+          <Text style={styles.subtitle}>Provide USDC liquidity to a stable pool on Arbitrum</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>Amount (USDC)</Text>
+          <Text style={styles.label}>Deposit amount (USDC)</Text>
           <TextInput
-            value={amount}
-            onChangeText={setAmount}
+            value={depositAmount}
+            onChangeText={setDepositAmount}
             keyboardType="decimal-pad"
             placeholder="0.00"
             placeholderTextColor="#9AA4B2"
@@ -48,14 +69,16 @@ export default function EarnScreen() {
 
           <View style={styles.buttonRow}>
             <Pressable
-              onPress={() => amount && fetchQuote(amount, preset)}
-              style={styles.previewButton}
+              onPress={() => canPreview && fetchQuote(depositAmount)}
+              style={[styles.previewButton, !canPreview && styles.buttonDisabled]}
+              disabled={!canPreview}
             >
               <Text style={styles.previewButtonText}>Preview</Text>
             </Pressable>
             <Pressable
-              onPress={() => amount && createPosition(amount, preset)}
-              style={styles.supplyButton}
+              onPress={() => canSupply && deposit(depositAmount)}
+              style={[styles.supplyButton, !canSupply && styles.buttonDisabled]}
+              disabled={!canSupply}
             >
               <Text style={styles.supplyButtonText}>Supply</Text>
             </Pressable>
@@ -73,48 +96,47 @@ export default function EarnScreen() {
           {quote ? (
             <View style={styles.quoteCard}>
               <Text style={styles.quoteTitle}>Quote</Text>
-              <Text style={styles.quoteText}>Pool: {quote.token0} / {quote.token1}</Text>
-              <Text style={styles.quoteText}>Fee tier: {quote.fee} bps</Text>
-              <Text style={styles.quoteText}>Amount: {quote.amount} USDC</Text>
+              <Text style={styles.quoteText}>Estimated LP minted: {quoteLpDisplay}</Text>
+              <Text style={styles.quoteText}>Min LP after slippage: {quoteMinLpDisplay}</Text>
+              <Text style={styles.quoteText}>Slippage: {quote.slippageBps} bps</Text>
             </View>
           ) : null}
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Your positions</Text>
-          {positions.length === 0 ? (
+          <Text style={styles.sectionTitle}>Your position</Text>
+          {!hasPosition ? (
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyText}>No positions yet</Text>
+              <Text style={styles.emptyText}>No active position yet</Text>
             </View>
           ) : (
-            <View style={styles.positionsList}>
-              {positions.map((position) => (
-                <View key={position.id} style={styles.positionCard}>
-                  <Text style={styles.positionAmount}>
-                    {position.amount ?? '—'} USDC
-                  </Text>
-                  <Text style={styles.positionDetails}>
-                    Range: {position.rangePreset ?? '—'} • Status: {position.status ?? '—'}
-                  </Text>
-
-                  <View style={styles.positionButtons}>
-                    <Pressable
-                      onPress={() => collectFees(position.id)}
-                      style={styles.collectButton}
-                    >
-                      <Text style={styles.collectButtonText}>Collect</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => withdrawPosition(position.id)}
-                      style={styles.withdrawButton}
-                    >
-                      <Text style={styles.withdrawButtonText}>Withdraw</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ))}
+            <View style={styles.positionCard}>
+              <Text style={styles.positionAmount}>{usdcValueDisplay} USDC</Text>
+              <Text style={styles.positionDetails}>Status: {position?.status ?? '—'}</Text>
+              <Text style={styles.positionDetails}>
+                LP balance: {lpBalanceDisplay}
+              </Text>
             </View>
           )}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Withdraw amount (USDC)</Text>
+          <TextInput
+            value={withdrawAmount}
+            onChangeText={setWithdrawAmount}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            placeholderTextColor="#9AA4B2"
+            style={styles.input}
+          />
+          <Pressable
+            onPress={() => canWithdraw && withdraw(withdrawAmount)}
+            style={[styles.withdrawButton, !canWithdraw && styles.buttonDisabled]}
+            disabled={!canWithdraw}
+          >
+            <Text style={styles.withdrawButtonText}>Withdraw</Text>
+          </Pressable>
         </View>
 
         <View style={styles.bottomPadding} />
@@ -180,35 +202,6 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
     marginBottom: 20,
   },
-  presetsContainer: {
-    gap: 8,
-    marginBottom: 20,
-  },
-  presetButton: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  presetButtonActive: {
-    backgroundColor: '#EEF2FF',
-    borderColor: '#6366F1',
-  },
-  presetLabel: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#0F172A',
-  },
-  presetLabelActive: {
-    color: '#6366F1',
-  },
-  presetHelper: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#64748B',
-    marginTop: 4,
-  },
   buttonRow: {
     flexDirection: 'row',
     gap: 12,
@@ -235,6 +228,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   supplyButtonText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
+  },
+  withdrawButton: {
+    backgroundColor: '#6366F1',
+    borderRadius: 14,
+    padding: 14,
+    alignItems: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  withdrawButtonText: {
     fontSize: 15,
     fontFamily: 'Inter_600SemiBold',
     color: '#FFFFFF',
@@ -296,9 +303,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: '#64748B',
   },
-  positionsList: {
-    gap: 12,
-  },
   positionCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
@@ -319,37 +323,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: '#64748B',
     marginTop: 4,
-    marginBottom: 16,
-  },
-  positionButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  collectButton: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    padding: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  collectButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#0F172A',
-  },
-  withdrawButton: {
-    flex: 1,
-    backgroundColor: '#6366F1',
-    borderRadius: 12,
-    padding: 12,
-    alignItems: 'center',
-  },
-  withdrawButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
   },
   bottomPadding: {
     height: 100,

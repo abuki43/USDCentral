@@ -29,6 +29,39 @@ const isFailedState = (state?: string | null) => FAILED_STATES.has(normalizeStat
 const getAlertRef = (uid: string, docId: string) =>
   firestoreAdmin.collection("users").doc(uid).collection("alerts").doc(docId);
 
+const upsertInboundAlertIfChanged = async (
+  uid: string,
+  payload: {
+    txId: string;
+    state: string;
+    blockchain: string | null;
+    amount: string;
+    symbol: string | null;
+  },
+) => {
+  const alertRef = getAlertRef(uid, "inboundUSDC");
+  const snap = await alertRef.get();
+  const current = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+
+  const isSame =
+    current &&
+    current.txId === payload.txId &&
+    current.state === payload.state &&
+    current.blockchain === payload.blockchain &&
+    current.amount === payload.amount &&
+    current.symbol === payload.symbol;
+
+  if (isSame) return;
+
+  await alertRef.set(
+    {
+      ...payload,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+};
+
 const sanitizeForFirestore = (value: unknown) =>
   JSON.parse(
     JSON.stringify(value, (_key, v) => {
@@ -253,18 +286,13 @@ export const processBridgeToHubJob = async (params: BridgeToHubJob) => {
       metadata: { bridged: true },
     });
 
-    const alertRef = getAlertRef(uid, "inboundUSDC");
-    await alertRef.set(
-      {
-        txId,
-        state: "BRIDGED",
-        blockchain: HUB_DESTINATION_CHAIN,
-        amount,
-        symbol,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
+    await upsertInboundAlertIfChanged(uid, {
+      txId,
+      state: "BRIDGED",
+      blockchain: HUB_DESTINATION_CHAIN,
+      amount,
+      symbol,
+    });
 
     await recomputeUnifiedUsdcBalance(uid);
   } catch (error) {
@@ -375,17 +403,13 @@ const handleInboundTransaction = async (params: {
 
   if (isUsdc && state === "CONFIRMED") {
     if (isHub) {
-      await alertRef.set(
-        {
-          txId: depositId,
-          state,
-          blockchain: chain ?? tx.blockchain ?? null,
-          amount,
-          symbol,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
+      await upsertInboundAlertIfChanged(uid, {
+        txId: depositId,
+        state,
+        blockchain: chain ?? tx.blockchain ?? null,
+        amount,
+        symbol,
+      });
     } else if (!existingBridgeStatus || existingBridgeStatus === "FAILED") {
       if (!chain) {
         console.warn("[webhook] skipping auto-bridge for unknown inbound chain", {
