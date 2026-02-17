@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import helmet from "helmet";
 
 import authRouter from "./routes/auth.route.js";
 import bridgeRouter from "./routes/bridge.route.js";
@@ -14,6 +15,7 @@ import { config } from "./config.js";
 import { requestContext } from "./middleware/requestContext.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { logger } from "./lib/logger.js";
+import { apiRateLimiter } from "./middleware/rateLimit.js";
 
 
 
@@ -21,16 +23,41 @@ import { logger } from "./lib/logger.js";
 
 const app = express();
 
-app.use(cors());
+app.disable("x-powered-by");
+if (config.trustProxy) {
+    app.set("trust proxy", 1);
+}
+
+const corsOrigins = config.corsOrigins.length ? config.corsOrigins : null;
+app.use(
+    cors({
+        origin: (origin, callback) => {
+            if (!corsOrigins || !origin) return callback(null, true);
+            if (corsOrigins.includes(origin)) return callback(null, true);
+            return callback(null, false);
+        },
+        credentials: true,
+    }),
+);
+app.use(helmet());
 app.use(requestContext);
 
 // Webhooks require the raw body for signature verification.
 app.use("/webhooks", webhooksRouter);
 
-app.use(express.json());
+app.use(apiRateLimiter);
+
+app.use(express.json({ limit: config.jsonBodyLimit }));
 
 app.get("/", (_req, res) => {
     res.status(200).json({ success: true });
+});
+
+app.get("/health", (_req, res) => {
+    res.status(200).json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+    });
 });
 
 app.use("/auth", authRouter);

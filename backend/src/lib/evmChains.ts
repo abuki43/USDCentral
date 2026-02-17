@@ -1,4 +1,4 @@
-import { type SupportedChain } from "./usdcAddresses.js";
+import { type SupportedChain } from "./chains.js";
 
 export const EVM_CHAIN_ID_BY_CIRCLE_CHAIN: Partial<Record<SupportedChain, number>> = {
   "ETH-SEPOLIA": 11155111,

@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import type { DecodedIdToken } from "firebase-admin/auth";
 
 import { firebaseAuthAdmin } from "../lib/firebaseAdmin.js";
+import { UnauthorizedError } from "../lib/errors.js";
 
 export type AuthenticatedRequest = Request & {
   user: DecodedIdToken;
@@ -9,13 +10,13 @@ export type AuthenticatedRequest = Request & {
 
 export const requireAuth = async (
   req: Request,
-  res: Response,
+  _res: Response,
   next: NextFunction,
 ) => {
   const header = req.headers.authorization;
 
   if (!header?.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Missing bearer token." });
+    return next(new UnauthorizedError("Missing bearer token."));
   }
 
   const token = header.replace("Bearer ", "");
@@ -25,6 +26,6 @@ export const requireAuth = async (
     (req as AuthenticatedRequest).user = decoded;
     return next();
   } catch (error) {
-    return res.status(401).json({ message: "Invalid or expired token." });
+    return next(new UnauthorizedError("Invalid or expired token."));
   }
 };
