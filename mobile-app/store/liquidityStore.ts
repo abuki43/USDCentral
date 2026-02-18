@@ -1,28 +1,7 @@
 import { create } from 'zustand';
 
-import { backendFetch } from '@/lib/backend';
-
-export type CurvePosition = {
-  id?: string;
-  status?: string;
-  lpBalance?: string;
-  lpDecimals?: number;
-  usdcValue?: string;
-  poolAddress?: string;
-  lpTokenAddress?: string;
-  updatedAt?: unknown;
-};
-
-type LiquidityQuote = {
-  amount: string;
-  poolAddress: string;
-  lpTokenAddress: string;
-  usdcIndex: number;
-  poolSize: number;
-  estimatedLpTokens: string;
-  minMintAmount: string;
-  slippageBps: number;
-};
+import { api, type CurvePosition, type LiquidityQuote } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 
 type LiquidityState = {
   isLoading: boolean;
@@ -43,13 +22,10 @@ export const useLiquidityStore = create<LiquidityState>((set, get) => ({
   fetchQuote: async (amount) => {
     set({ isLoading: true, error: null });
     try {
-      const data = await backendFetch('/liquidity/quote', {
-        method: 'POST',
-        body: JSON.stringify({ amount }),
-      });
-      set({ quote: data.quote ?? null });
+      const quote = await api.liquidity.quote(amount);
+      set({ quote });
     } catch (err: unknown) {
-      set({ error: err instanceof Error ? err.message : 'Failed to load quote' });
+      set({ error: getErrorMessage(err, 'Failed to load quote') });
     } finally {
       set({ isLoading: false });
     }
@@ -57,13 +33,10 @@ export const useLiquidityStore = create<LiquidityState>((set, get) => ({
   deposit: async (amount) => {
     set({ isLoading: true, error: null });
     try {
-      await backendFetch('/liquidity/deposit', {
-        method: 'POST',
-        body: JSON.stringify({ amount }),
-      });
+      await api.liquidity.deposit(amount);
       await get().loadPosition();
     } catch (err: unknown) {
-      set({ error: err instanceof Error ? err.message : 'Failed to deposit' });
+      set({ error: getErrorMessage(err, 'Failed to deposit') });
     } finally {
       set({ isLoading: false });
     }
@@ -71,10 +44,10 @@ export const useLiquidityStore = create<LiquidityState>((set, get) => ({
   loadPosition: async () => {
     set({ isLoading: true, error: null });
     try {
-      const data = await backendFetch('/liquidity/position');
-      set({ position: data.position ?? null });
+      const position = await api.liquidity.position();
+      set({ position });
     } catch (err: unknown) {
-      set({ error: err instanceof Error ? err.message : 'Failed to load position' });
+      set({ error: getErrorMessage(err, 'Failed to load position') });
     } finally {
       set({ isLoading: false });
     }
@@ -82,13 +55,10 @@ export const useLiquidityStore = create<LiquidityState>((set, get) => ({
   withdraw: async (amount) => {
     set({ isLoading: true, error: null });
     try {
-      await backendFetch('/liquidity/withdraw', {
-        method: 'POST',
-        body: JSON.stringify({ amount }),
-      });
+      await api.liquidity.withdraw(amount);
       await get().loadPosition();
     } catch (err: unknown) {
-      set({ error: err instanceof Error ? err.message : 'Failed to withdraw' });
+      set({ error: getErrorMessage(err, 'Failed to withdraw') });
     } finally {
       set({ isLoading: false });
     }

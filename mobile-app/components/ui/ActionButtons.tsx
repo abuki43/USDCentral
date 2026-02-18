@@ -64,14 +64,15 @@ export default function ActionButtons() {
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    justifyContent: 'space-around', 
+    justifyContent: 'space-around',
     marginBottom: 24,
-    marginTop: 32, 
+    marginTop: 32,
   },
   button: {
-
+    flex: 1,
     alignItems: 'center',
     padding: 8,
+    marginHorizontal: 6,
   },
   buttonPressed: {
     opacity: 0.8,
@@ -113,5 +114,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'Inter_600SemiBold',
     color: '#0F172A',
+    textAlign: 'center',
+    width: '100%',
   },
 });

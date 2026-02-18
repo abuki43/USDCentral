@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 
 import { firebaseAuth } from '@/lib/firebase';
+import { buildBackendError } from '@/lib/errors';
 
 const backendUrl =
   (Constants.expoConfig?.extra?.backendUrl as string | undefined) ??
@@ -25,45 +26,8 @@ export async function backendFetch(path: string, init: RequestInit = {}) {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     if (text) {
-      const parseJson = (raw: string) => {
-        try {
-          return JSON.parse(raw);
-        } catch {
-          return null;
-        }
-      };
-
-      let data = parseJson(text);
-      if (typeof data === 'string') {
-        data = parseJson(data);
-      }
-
-      if (!data) {
-        const trimmed = text.trim();
-        const start = trimmed.indexOf('{');
-        const end = trimmed.lastIndexOf('}');
-        if (start !== -1 && end > start) {
-          data = parseJson(trimmed.slice(start, end + 1));
-          if (typeof data === 'string') {
-            data = parseJson(data);
-          }
-        }
-      }
-
-      if (data && typeof data === 'object') {
-        const message =
-          (data as { message?: string })?.message || `Request failed (${res.status})`;
-        const error = new Error(message) as Error & {
-          code?: string;
-          details?: unknown;
-        };
-        const code = (data as { code?: string })?.code;
-        const details = (data as { details?: unknown })?.details;
-        if (code) error.code = code;
-        if (details) error.details = details;
-        throw error;
-      }
-
+      const parsed = buildBackendError(text, res.status);
+      if (parsed) throw parsed;
       throw new Error(text);
     }
     throw new Error(`Request failed (${res.status})`);

@@ -3,15 +3,12 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, StyleS
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { backendFetch } from '@/lib/backend';
+import { api, type BridgeEstimate } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { CHAIN_LABELS, type WithdrawChain, WITHDRAW_CHAINS } from '@/lib/chains';
 import Button from '@/components/ui/Button';
 
 const HUB_CHAIN: WithdrawChain = 'ARB-SEPOLIA';
-
-type BridgeEstimate = {
-  fees?: { type?: string; amount?: string }[];
-};
 
 export default function WithdrawScreen() {
   const router = useRouter();
@@ -36,19 +33,17 @@ export default function WithdrawScreen() {
 
     const timeout = setTimeout(() => {
       setIsEstimating(true);
-      backendFetch('/bridge/estimate', {
-        method: 'POST',
-        body: JSON.stringify({
+      api.bridge
+        .estimate({
           destinationChain,
           recipientAddress,
           amount,
-        }),
-      })
-        .then((data: { estimate?: BridgeEstimate | null }) => {
-          setEstimate(data.estimate ?? null);
+        })
+        .then((estimate) => {
+          setEstimate(estimate ?? null);
         })
         .catch((err: unknown) => {
-          setEstimateError(err instanceof Error ? err.message : 'Failed to estimate fees');
+          setEstimateError(getErrorMessage(err, 'Failed to estimate fees'));
         })
         .finally(() => setIsEstimating(false));
     }, 400);
@@ -58,7 +53,10 @@ export default function WithdrawScreen() {
 
   const providerFee = useMemo(() => {
     if (!estimate?.fees) return null;
-    return estimate.fees.find((fee) => fee.type === 'provider')?.amount ?? null;
+    return (
+      estimate.fees.find((fee: { type?: string }) => fee.type === 'provider')
+        ?.amount ?? null
+    );
   }, [estimate]);
 
   const canSubmit = Boolean(amount && recipientAddress && destinationChain && !isSubmitting);
@@ -70,19 +68,16 @@ export default function WithdrawScreen() {
     setIsSubmitting(true);
 
     try {
-      await backendFetch('/bridge/withdraw', {
-        method: 'POST',
-        body: JSON.stringify({
-          destinationChain,
-          recipientAddress,
-          amount,
-        }),
+      await api.bridge.withdraw({
+        destinationChain,
+        recipientAddress,
+        amount,
       });
       setSubmitSuccess('Withdrawal initiated.');
       setAmount('');
       setRecipientAddress('');
     } catch (err: unknown) {
-      setSubmitError(err instanceof Error ? err.message : 'Withdraw failed');
+      setSubmitError(getErrorMessage(err, 'Withdraw failed'));
     } finally {
       setIsSubmitting(false);
     }

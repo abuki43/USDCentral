@@ -3,15 +3,10 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View, StyleSheet, SafeA
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { backendFetch } from '@/lib/backend';
+import { api, type ResolvedRecipient } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-
-type ResolvedRecipient = {
-  uid: string;
-  displayName: string | null;
-  email: string | null;
-};
 
 type RecipientMode = 'appId' | 'email';
 
@@ -42,15 +37,14 @@ export default function SendScreen() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const data = await backendFetch(
+      const data =
         recipientMode === 'email'
-          ? `/transfer/resolve-email?email=${encodeURIComponent(email)}`
-          : `/transfer/resolve?uid=${encodeURIComponent(uid)}`,
-      );
-      setResolved(data as ResolvedRecipient);
+          ? await api.transfer.resolveEmail(email)
+          : await api.transfer.resolve(uid);
+      setResolved(data);
     } catch (error) {
       setResolved(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to resolve user');
+      setErrorMessage(getErrorMessage(error, 'Failed to resolve user'));
     } finally {
       setIsResolving(false);
     }
@@ -66,17 +60,14 @@ export default function SendScreen() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      await backendFetch('/transfer/send', {
-        method: 'POST',
-        body: JSON.stringify({ recipientUid: resolved.uid, amount }),
-      });
+      await api.transfer.send({ recipientUid: resolved.uid, amount });
       setSuccessMessage('Transfer submitted. Returning to home…');
       setRecipientUid('');
       setRecipientEmail('');
       setAmount('');
       setResolved(null);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Transfer failed');
+      setErrorMessage(getErrorMessage(error, 'Transfer failed'));
     } finally {
       setIsSending(false);
     }

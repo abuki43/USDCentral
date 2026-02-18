@@ -109,8 +109,8 @@ export default function TabOneScreen() {
       .filter(isFinalHubDeposit)
       .filter(isVisibleEarn)
       .sort((a, b) => {
-        const aTime = toMillis(a.updatedAt ?? a.createdAt);
-        const bTime = toMillis(b.updatedAt ?? b.createdAt);
+        const aTime = toMillis(a.createdAt ?? a.updatedAt);
+        const bTime = toMillis(b.createdAt ?? b.updatedAt);
         return bTime - aTime;
       });
   }, [transactions]);
@@ -183,7 +183,7 @@ export default function TabOneScreen() {
     setTxError(null);
 
     const txRef = collection(firestore, 'users', user.uid, 'transactions');
-    const txQuery = query(txRef, orderBy('updatedAt', 'desc'), limit(20));
+    const txQuery = query(txRef, orderBy('createdAt', 'desc'), limit(20));
 
     const unsubscribe = onSnapshot(
       txQuery,
