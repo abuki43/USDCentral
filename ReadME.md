@@ -6,21 +6,21 @@
 
 ---
 
-## 👋 What is USDCentral?
+##  What is USDCentral?
 
-USDCentral is all about making stablecoins easy for everyone. I built it because managing crypto across a dozen different chains is a headache for most people. With USDCentral, all that "chain" stuff happens in the background. You just manage your money.
+USDCentral is all about making stablecoins easy for everyone. I built it because managing USDC across a dozen different chains is a headache for most people. With USDCentral, all that "chain" stuff happens in the background. You just manage your money and Earn on your stable.
 
 **Built for the ETH Global Hackathon 2026!** 🚀
 
 ### What can you do?
 - **Manage everything in one place**: No matter what chain your USDC is on, it just shows up as your balance.
-- **Earn Yield**: Put your money to work. *(Heads up: This part is still a work in progress! We're finishing up the liquidity features).*
+- **Earn Yield**: Put your money to work.
 - **Send & Move**: Send USDC to friends or move it to your other wallets without sweating about gas fees or bridge jargon.
 - **Just Work**: You don't need to know how the plumbing works to use it.
 
 ---
 
-## 📱 A look inside
+##  A look inside
 
 <div align="center">
   <table style="border: none;">
@@ -46,27 +46,27 @@ USDCentral is all about making stablecoins easy for everyone. I built it because
 
 ---
 
-## 🛠️ The Tech Stuff
+##  The Tech Stuff
 
 ### Backend
 - **Core**: Node.js & TypeScript
-- **Wallets**: Powered by **Circle Developer Controlled Wallets** 
-- **Database**: Firebase (fast)
+- **Wallet**: Powered by **Circle Developer Controlled Wallets** 
+- **Database**: Firebase 
 - **Moving Parts**: CCTP, and **LI.FI** for auto-swapping any token to USDC during deposits (only mainnet)
+- **Earn** : Curve Finanace
 
 ### Mobile
-- **Frame**: React Native (Expo) - so it feels like a real app
+- **Frame**: React Native (Expo) 
 
 ---
 
-## 🔮 What's Next?
-- **Finish the "Earn" feature**: Getting liquidity pools fully polished.
+##  What's Next?
 - **On-ramp & Off-ramp**: Making it possible to buy USDC with your bank account and withdraw it back to real-world cash directly in the app.
 
 
 ---
 
-## 🏗️ Want to run it?
+##  Want to run it?
 
 1.  **Clone the repo**
 2.  **Backend Setup**:
